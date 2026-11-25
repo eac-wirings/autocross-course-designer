@@ -44,17 +44,22 @@ interface Props {
   ref?: Ref<MapHandle>;
 }
 
+/** The wand is tuned for ~0.9 m (3 ft) per pixel; finer views are downsampled to it. */
+const WAND_METERS_PER_PX = 0.9;
+
 interface WandSession {
   img: WandImage | null; // null once the view moves: pixels no longer line up
+  /** Wand pixels per screen pixel (≤ 1). */
+  scale: number;
   seeds: { x: number; y: number }[];
   featureIds: string[];
 }
 
 /** Draws the visible background imagery (tiles + imported image) into a canvas. */
-function captureView(map: L.Map): { rgba: Uint8ClampedArray; w: number; h: number } | string {
+function captureView(map: L.Map, scale: number): { rgba: Uint8ClampedArray; w: number; h: number } | string {
   const cont = map.getContainer();
   const cr = cont.getBoundingClientRect();
-  const w = Math.round(cr.width), h = Math.round(cr.height);
+  const w = Math.round(cr.width * scale), h = Math.round(cr.height * scale);
   const cv = document.createElement("canvas");
   cv.width = w;
   cv.height = h;
@@ -68,7 +73,7 @@ function captureView(map: L.Map): { rgba: Uint8ClampedArray; w: number; h: numbe
     if (r.right < cr.left || r.left > cr.right || r.bottom < cr.top || r.top > cr.bottom) return;
     if (!img.complete || !img.naturalWidth) { loading++; return; }
     ctx.globalAlpha = parseFloat(img.style.opacity || "1") * parseFloat(getComputedStyle(img).opacity || "1");
-    ctx.drawImage(img, r.left - cr.left, r.top - cr.top, r.width, r.height);
+    ctx.drawImage(img, (r.left - cr.left) * scale, (r.top - cr.top) * scale, r.width * scale, r.height * scale);
     drawn++;
   };
   for (const lvl of levels) lvl.querySelectorAll<HTMLImageElement>("img.leaflet-tile").forEach(draw);
@@ -226,11 +231,15 @@ export default function MapEditor(props: Props) {
     const map = mapRef.current!;
     const add = e.originalEvent.shiftKey && wandRef.current?.img;
     if (!add) {
-      const cap = captureView(map);
+      const lat = map.getCenter().lat;
+      const metersPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** map.getZoom();
+      const scale = Math.min(1, metersPerPx / WAND_METERS_PER_PX);
+      const cap = captureView(map, scale);
       if (typeof cap === "string") { P.onStatus(cap); return; }
-      wandRef.current = { img: prepareImage(cap.rgba, cap.w, cap.h), seeds: [], featureIds: [] };
+      wandRef.current = { img: prepareImage(cap.rgba, cap.w, cap.h), scale, seeds: [], featureIds: [] };
     }
-    wandRef.current!.seeds.push({ x: e.containerPoint.x, y: e.containerPoint.y });
+    const sc = wandRef.current!.scale;
+    wandRef.current!.seeds.push({ x: e.containerPoint.x * sc, y: e.containerPoint.y * sc });
     applyWand(add ? wandRef.current!.featureIds : []);
   }
 
@@ -243,7 +252,7 @@ export default function MapEditor(props: Props) {
     const shapes = runWand(s.img, s.seeds, { ...DEFAULT_WAND, tolerance: P.wand.tolerance, edgeStop: P.wand.stopAtEdges ? DEFAULT_WAND.edgeStop : 0 });
     let c = P.course;
     if (isEmpty(c)) { const ll = map.getCenter(); c = { ...c, origin: { lat: ll.lat, lng: ll.lng } }; }
-    const toPt = ([x, y]: [number, number]) => { const ll = map.containerPointToLatLng([x, y]); return toLocal({ lat: ll.lat, lng: ll.lng }, c.origin); };
+    const toPt = ([x, y]: [number, number]) => { const ll = map.containerPointToLatLng([x / s.scale, y / s.scale]); return toLocal({ lat: ll.lat, lng: ll.lng }, c.origin); };
     const created: Feature[] = [];
     let area = 0, holes = 0;
     for (const sh of shapes) {
