@@ -1,38 +1,38 @@
 {
-    "name":  "autocross-course-designer",
-    "private":  true,
-    "version":  "0.1.0",
-    "type":  "module",
-    "scripts":  {
-                    "dev":  "vite",
-                    "build":  "tsc -b \u0026\u0026 vite build",
-                    "lint":  "oxlint",
-                    "preview":  "vite preview",
-                    "tauri":  "tauri",
-                    "app:dev":  "tauri dev",
-                    "app:build":  "tauri build",
-                    "test":  "tsx scripts/gen-smoke.ts \u0026\u0026 tsx scripts/rules-smoke.ts"
-                },
-    "dependencies":  {
-                         "@tauri-apps/api":  "^2.12.5",
-                         "@tauri-apps/plugin-dialog":  "^2.8.4",
-                         "@tauri-apps/plugin-fs":  "^2.7.1",
-                         "leaflet":  "^1.9.4",
-                         "react":  "^19.3.1",
-                         "react-dom":  "^19.3.1",
-                         "three":  "^0.187.0"
-                     },
-    "devDependencies":  {
-                            "@tauri-apps/cli":  "^2.12.6",
-                            "@types/leaflet":  "^1.9.23",
-                            "@types/node":  "^24.19.2",
-                            "@types/react":  "^19.3.0",
-                            "@types/react-dom":  "^19.3.0",
-                            "@types/three":  "^0.187.0",
-                            "@vitejs/plugin-react":  "^6.1.2",
-                            "oxlint":  "^1.90.0",
-                            "tsx":  "^4.23.15",
-                            "typescript":  "~7.0.2",
-                            "vite":  "^8.3.6"
-                        }
+  "name": "autocross-course-designer",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:build": "tauri build",
+    "test": "node scripts/check-encoding.mjs && tsx scripts/gen-smoke.ts && tsx scripts/rules-smoke.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "@tauri-apps/plugin-dialog": "^2.8.4",
+    "@tauri-apps/plugin-fs": "^2.7.1",
+    "leaflet": "^1.9.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6",
+    "@types/leaflet": "^1.9.23",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.187.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.90.0",
+    "tsx": "^4.23.15",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6"
+  }
 }

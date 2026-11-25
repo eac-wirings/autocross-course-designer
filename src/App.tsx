@@ -222,8 +222,8 @@ export default function App() {
               <b>Image overlay</b>
               <label>Opacity <input type="range" min={0.1} max={1} step={0.05} value={course.image.opacity} onChange={(e) => setCourse({ ...course, image: { ...course.image!, opacity: +e.target.value } })} /></label>
               <div className="small">{(course.image.w / course.image.pxW).toFixed(3)} ft/px</div>
-              <button onClick={() => setTool("calibrate")}>Set scaleâ€¦</button>
-              <button onClick={() => setTool("image-move")}>Move imageâ€¦</button>
+              <button onClick={() => setTool("calibrate")}>Set scale…</button>
+              <button onClick={() => setTool("image-move")}>Move image…</button>
               <button onClick={() => change({ ...course, image: null })}>Remove image</button>
             </div>
           )}
@@ -246,7 +246,7 @@ export default function App() {
             onStatus={setStatus}
             onCalibrate={(a, b) => setCalib({ a, b })}
           />
-          <div className="hint">{toolHint}{status && <span className="status"> Â· {status}</span>}</div>
+          <div className="hint">{toolHint}{status && <span className="status"> · {status}</span>}</div>
           <div className="legend"><span>Speed:</span><i style={{ background: "hsl(140,90%,50%)" }} />20<i style={{ background: "hsl(70,90%,50%)" }} />42<i style={{ background: "hsl(0,90%,50%)" }} />65+ mph</div>
         </main>
 
@@ -255,9 +255,9 @@ export default function App() {
             <h3>Course</h3>
             <div className="stats">
               <div><b>{course.cones.length}</b><span>cones</span></div>
-              <div><b>{sim ? Math.round(sim.lengthFt) : "â€“"}</b><span>ft</span></div>
-              <div><b>{sim ? sim.timeS.toFixed(1) : "â€“"}</b><span>sec</span></div>
-              <div><b>{sim ? sim.maxMph.toFixed(0) : "â€“"}</b><span>top mph</span></div>
+              <div><b>{sim ? Math.round(sim.lengthFt) : "–"}</b><span>ft</span></div>
+              <div><b>{sim ? sim.timeS.toFixed(1) : "–"}</b><span>sec</span></div>
+              <div><b>{sim ? sim.maxMph.toFixed(0) : "–"}</b><span>top mph</span></div>
             </div>
           </section>
 
@@ -271,7 +271,7 @@ export default function App() {
                       <option value="standing">Standing</option><option value="pointer">Pointer</option><option value="timing">Timing light</option>
                     </select>
                   </label>
-                  {selCone.kind === "pointer" && <label>Points toward <input type="number" value={Math.round(((selCone.rot ?? 0) * 180) / Math.PI)} onChange={(e) => change({ ...course, cones: course.cones.map((k) => (k.id === selCone.id ? { ...k, rot: (+e.target.value * Math.PI) / 180 } : k)) })} />Â° (R key)</label>}
+                  {selCone.kind === "pointer" && <label>Points toward <input type="number" value={Math.round(((selCone.rot ?? 0) * 180) / Math.PI)} onChange={(e) => change({ ...course, cones: course.cones.map((k) => (k.id === selCone.id ? { ...k, rot: (+e.target.value * Math.PI) / 180 } : k)) })} />° (R key)</label>}
                   {selCone.groupId && <button onClick={() => { change({ ...course, cones: course.cones.filter((k) => k.groupId !== selCone.groupId) }); setSelection(null); }}>Delete whole {selCone.group}</button>}
                   <button onClick={() => { change({ ...course, cones: course.cones.filter((k) => k.id !== selCone.id) }); setSelection(null); }}>Delete cone</button>
                 </div>
@@ -343,7 +343,7 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
   const hasPaved = course.features.some((f) => f.kind === "paved" && f.pts.length >= 3);
   const run = () => {
     setBusy(true);
-    setMsg("Generating and checking candidate coursesâ€¦");
+    setMsg("Generating and checking candidate courses…");
     setTimeout(() => {
       const r = generateCourse(course, { targetLengthFt: target, seed, attempts: 150, technical });
       setBusy(false);
@@ -356,9 +356,9 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
     <div className="modal-bg">
       <div className="modal">
         <h2>Auto-generate a course</h2>
-        {!hasPaved ? <p>First outline the usable pavement with <b>Site area / object â†’ Paved area</b>, and mark obstacles, light poles, spectator, paddock and grid areas. The generator keeps the course inside the pavement with Solo Rules margins.</p> : (
+        {!hasPaved ? <p>First outline the usable pavement with <b>Site area / object → Paved area</b>, and mark obstacles, light poles, spectator, paddock and grid areas. The generator keeps the course inside the pavement with Solo Rules margins.</p> : (
           <>
-            <p className="small">Builds a mix of sweepers, 90s, slaloms (60â€“74 ft) and offsets with alternating directions, keeps straights short, fits a finish with runout, then simulates and rule-checks 150 candidates and keeps the best. Treat it as a starting point and refine by hand.</p>
+            <p className="small">Builds a mix of sweepers, 90s, slaloms (60–74 ft) and offsets with alternating directions, keeps straights short, fits a finish with runout, then simulates and rule-checks 150 candidates and keeps the best. Treat it as a starting point and refine by hand.</p>
             <label className="row">Target length <input type="number" step={100} value={target} onChange={(e) => setTarget(+e.target.value)} /> ft</label>
             <label className="row">Style: open <input type="range" min={0} max={1} step={0.1} value={technical} onChange={(e) => setTechnical(+e.target.value)} /> technical</label>
             <label className="row">Seed <input type="number" value={seed} onChange={(e) => setSeed(+e.target.value)} /> <button onClick={() => setSeed(Math.floor(Math.random() * 100000))}>Random</button></label>
@@ -367,7 +367,7 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
         {msg && <p className="small">{msg}</p>}
         <div className="actions">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!hasPaved || busy} onClick={run}>{busy ? "Workingâ€¦" : "Generate"}</button>
+          <button className="primary" disabled={!hasPaved || busy} onClick={run}>{busy ? "Working…" : "Generate"}</button>
         </div>
       </div>
     </div>
@@ -397,7 +397,7 @@ function HelpDialog({ onClose }: { onClose(): void }) {
           <li><b>Find the site.</b> Search an address or "lat, lng", or import a Google Earth Pro screenshot (<i>Import image</i>, then set its scale) or KML of placemarks you traced in Google Earth.</li>
           <li><b>Map the site.</b> With <i>Site area / object</i>, outline the <b>paved area</b>, then mark light poles, curbs, buildings/fences, surface hazards (holes, grates, gravel), spectator, paddock and grid areas.</li>
           <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or click <i>Auto-generate</i>.</li>
-          <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (midâ€‘60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
+          <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (mid‑60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
           <li><b>Drive it.</b> <i>3D run-through</i> drives the simulated line in driver, chase or free-orbit view.</li>
           <li><b>Share.</b> Save the .axcourse project, export KML to view it in Google Earth, or export a printable SVG course map.</li>
         </ol>
