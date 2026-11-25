@@ -2,13 +2,16 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { FT_PER_S_PER_MPH, add, dist, heading, norm, perp, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
-import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type FeatureKind } from "./model";
+import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type Feature, type FeatureKind } from "./model";
 import type { Issue } from "./rules";
+import { DEFAULT_WAND, prepareImage, runWand, type WandImage } from "./wand";
 import type { SimResult } from "./sim";
 
 export type Tool =
   | "select" | "cone" | "pointer" | "gate" | "slalom" | "wall" | "line" | "feature"
-  | "start" | "finish" | "calibrate" | "image-move" | "measure";
+  | "start" | "finish" | "calibrate" | "image-move" | "measure" | "wand";
+
+export interface WandSettings { tolerance: number; kind: FeatureKind; holesAsNogo: boolean; stopAtEdges: boolean }
 
 export type Selection = { type: "cone"; id: string } | { type: "feature"; id: string } | { type: "line" } | null;
 
@@ -37,7 +40,46 @@ interface Props {
   onToolDone(): void;
   onStatus(s: string): void;
   onCalibrate(a: Pt, b: Pt): void;
+  wand: WandSettings;
   ref?: Ref<MapHandle>;
+}
+
+interface WandSession {
+  img: WandImage | null; // null once the view moves: pixels no longer line up
+  seeds: { x: number; y: number }[];
+  featureIds: string[];
+}
+
+/** Draws the visible background imagery (tiles + imported image) into a canvas. */
+function captureView(map: L.Map): { rgba: Uint8ClampedArray; w: number; h: number } | string {
+  const cont = map.getContainer();
+  const cr = cont.getBoundingClientRect();
+  const w = Math.round(cr.width), h = Math.round(cr.height);
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext("2d", { willReadFrequently: true })!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, w, h);
+  const levels = [...cont.querySelectorAll<HTMLElement>(".leaflet-tile-container")].sort((a, b) => (+a.style.zIndex || 0) - (+b.style.zIndex || 0));
+  let drawn = 0, loading = 0;
+  const draw = (img: HTMLImageElement) => {
+    const r = img.getBoundingClientRect();
+    if (r.right < cr.left || r.left > cr.right || r.bottom < cr.top || r.top > cr.bottom) return;
+    if (!img.complete || !img.naturalWidth) { loading++; return; }
+    ctx.globalAlpha = parseFloat(img.style.opacity || "1") * parseFloat(getComputedStyle(img).opacity || "1");
+    ctx.drawImage(img, r.left - cr.left, r.top - cr.top, r.width, r.height);
+    drawn++;
+  };
+  for (const lvl of levels) lvl.querySelectorAll<HTMLImageElement>("img.leaflet-tile").forEach(draw);
+  cont.querySelectorAll<HTMLImageElement>("img.leaflet-image-layer").forEach(draw);
+  if (!drawn) return "There's no imagery to read here. Switch the background to Aerial, or import an image of the site.";
+  if (loading) return "The imagery is still loading. Wait a moment and click again.";
+  try {
+    return { rgba: ctx.getImageData(0, 0, w, h).data, w, h };
+  } catch {
+    return "This background can't be read by the wand. Switch to Aerial (Esri or USGS), or import an image of the site.";
+  }
 }
 
 const TILES: Record<Exclude<Basemap, "none">, { url: string; attribution: string; maxNative: number }> = {
@@ -108,8 +150,10 @@ export default function MapEditor(props: Props) {
 
     const local = (e: L.LeafletMouseEvent) => toLocal({ lat: e.latlng.lat, lng: e.latlng.lng }, latest.current.course.origin);
 
+    map.on("movestart zoomstart resize", () => { if (wandRef.current) wandRef.current.img = null; });
     map.on("click", (e: L.LeafletMouseEvent) => {
       const P = latest.current;
+      if (P.tool === "wand") { wandClick(e); return; }
       let c = P.course;
       // First thing placed on an empty project: re-center the local frame on the click.
       if (isEmpty(c) && P.tool !== "select" && P.tool !== "measure") c = { ...c, origin: { lat: e.latlng.lat, lng: e.latlng.lng } };
@@ -172,6 +216,66 @@ export default function MapEditor(props: Props) {
 
   // reset pending when tool changes
   useEffect(() => { setPending([]); }, [props.tool, props.featureKind]);
+
+  // ---- magic wand
+  const wandRef = useRef<WandSession | null>(null);
+  useEffect(() => { if (props.tool !== "wand") wandRef.current = null; }, [props.tool]);
+
+  function wandClick(e: L.LeafletMouseEvent) {
+    const P = latest.current;
+    const map = mapRef.current!;
+    const add = e.originalEvent.shiftKey && wandRef.current?.img;
+    if (!add) {
+      const cap = captureView(map);
+      if (typeof cap === "string") { P.onStatus(cap); return; }
+      wandRef.current = { img: prepareImage(cap.rgba, cap.w, cap.h), seeds: [], featureIds: [] };
+    }
+    wandRef.current!.seeds.push({ x: e.containerPoint.x, y: e.containerPoint.y });
+    applyWand(add ? wandRef.current!.featureIds : []);
+  }
+
+  /** (Re)runs the wand for the current session and swaps its zones into the course. */
+  function applyWand(replaceIds: string[]) {
+    const P = latest.current;
+    const s = wandRef.current;
+    const map = mapRef.current!;
+    if (!s?.img) return;
+    const shapes = runWand(s.img, s.seeds, { ...DEFAULT_WAND, tolerance: P.wand.tolerance, edgeStop: P.wand.stopAtEdges ? DEFAULT_WAND.edgeStop : 0 });
+    let c = P.course;
+    if (isEmpty(c)) { const ll = map.getCenter(); c = { ...c, origin: { lat: ll.lat, lng: ll.lng } }; }
+    const toPt = ([x, y]: [number, number]) => { const ll = map.containerPointToLatLng([x, y]); return toLocal({ lat: ll.lat, lng: ll.lng }, c.origin); };
+    const created: Feature[] = [];
+    let area = 0, holes = 0;
+    for (const sh of shapes) {
+      const pts = sh.outer.map(toPt);
+      const a = polygonArea(pts);
+      if (a < 100) continue;
+      area += a;
+      created.push({ id: uid("f"), kind: P.wand.kind, pts, closed: true, label: P.wand.kind === "paved" ? "Course area (wand)" : undefined });
+      if (P.wand.holesAsNogo && P.wand.kind === "paved") {
+        for (const hr of sh.holes) {
+          const hp = hr.map(toPt);
+          if (polygonArea(hp) < 150) continue;
+          created.push({ id: uid("f"), kind: "nogo", pts: hp, closed: true, label: "Island (wand)" });
+          holes++;
+        }
+      }
+    }
+    s.featureIds = created.map((f) => f.id);
+    P.onChange({ ...c, features: [...c.features.filter((f) => !replaceIds.includes(f.id)), ...created] });
+    if (!created.length) { P.onStatus("Nothing found there. Click inside the pavement, or raise Tolerance."); return; }
+    const acres = area / 43560;
+    P.onStatus(`Found ${acres >= 0.5 ? acres.toFixed(2) + " acres" : Math.round(area).toLocaleString() + " ft²"}${holes ? `, ${holes} island(s) marked Don't use` : ""}. Shift-click to add more; adjust Tolerance to grow or shrink.`);
+  }
+
+  // Re-run when the wand settings change (only while the view hasn't moved).
+  useEffect(() => {
+    const s = wandRef.current;
+    if (props.tool !== "wand" || !s?.img || !s.seeds.length) return;
+    const t = setTimeout(() => applyWand(s.featureIds), 150);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.wand.tolerance, props.wand.kind, props.wand.holesAsNogo, props.wand.stopAtEdges]);
 
   /** Screen distance in pixels between two local points. */
   function pxDist(a: Pt, b: Pt, c: Course) {

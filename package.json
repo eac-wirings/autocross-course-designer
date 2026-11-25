@@ -1,7 +1,7 @@
 {
   "name": "autocross-course-designer",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
-    "test": "node scripts/check-encoding.mjs && tsx scripts/gen-smoke.ts && tsx scripts/rules-smoke.ts"
+    "test": "node scripts/check-encoding.mjs && tsx scripts/gen-smoke.ts && tsx scripts/rules-smoke.ts && tsx scripts/wand-smoke.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.5",

@@ -16,6 +16,13 @@
 .tools .zone span { display: flex; align-items: center; gap: 8px; }
 .tools .zone i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .tools .seg-row { display: flex; gap: 4px; }
+.tools .wand { display: flex; justify-content: space-between; align-items: center; border-color: #0e7490; background: #0c2a33; }
+.tools .wand.on { border-color: var(--accent); background: #3a2414; }
+.tools .wand-opts { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: #0f141a; border-radius: 6px; }
+.tools .wand-opts label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
+.tools .wand-opts input[type=range] { width: 80px; }
+.tools .wand-opts select { max-width: 100px; }
+.tools .wand-opts label.chk { justify-content: flex-start; }
 .tools .seg-row button { flex: 1; display: flex; justify-content: center; gap: 6px; align-items: center; }
 .tools .seg-row button.on { border-color: var(--accent); background: #3a2414; }
 .tools > button { display: flex; justify-content: space-between; align-items: center; text-align: left; }

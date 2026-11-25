@@ -3,7 +3,7 @@ import "./App.css";
 import { dist, type Pt } from "./geo";
 import { generateCourse, suggestedLength, type GenResult } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
-import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions } from "./MapEditor";
+import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
 import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Course, type FeatureKind } from "./model";
 import { polygonArea } from "./geo";
 import { checkCourse, type Issue } from "./rules";
@@ -32,6 +32,7 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: "finish", label: "Finish line", key: "2", hint: "Click both timing lights of the finish." },
   { id: "feature", label: "Zone / site object", key: "A", hint: "Click points around the area, Enter or double-click to close it." },
   { id: "measure", label: "Measure", key: "M", hint: "Click two points to measure distance." },
+  { id: "wand", label: "Find pavement", key: "F", hint: "Click inside a parking lot or runway to outline it from the aerial photo. Shift-click to add more; adjust Tolerance to grow or shrink. Zoom so the area fills most of the view." },
 ];
 
 export default function App() {
@@ -42,6 +43,7 @@ export default function App() {
   const [featureKind, setFeatureKind] = useState<FeatureKind>("paved");
   const [selection, setSelection] = useState<Selection>(null);
   const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6, zoneShape: "polygon" });
+  const [wand, setWand] = useState<WandSettings>({ tolerance: 16, kind: "paved", holesAsNogo: true, stopAtEdges: true });
   const [basemap, setBasemap] = useState<Basemap>("esri");
   const [status, setStatus] = useState("");
   const [show3D, setShow3D] = useState(false);
@@ -206,6 +208,21 @@ export default function App() {
           </div>
 
           <div className="section-title"><b>1</b> Site zones</div>
+          <button className={`wand ${tool === "wand" ? "on" : ""}`} onClick={() => setTool("wand")} title={TOOLS.find((t) => t.id === "wand")!.hint}>
+            <span>✦ Find pavement</span><kbd>F</kbd>
+          </button>
+          {tool === "wand" && (
+            <div className="wand-opts">
+              <label>Tolerance <input type="range" min={4} max={40} step={1} value={wand.tolerance} onChange={(e) => setWand({ ...wand, tolerance: +e.target.value })} /> <span>{wand.tolerance}</span></label>
+              <label>Create as
+                <select value={wand.kind} onChange={(e) => setWand({ ...wand, kind: e.target.value as FeatureKind })}>
+                  {(["paved", "paddock", "nogo", "grid"] as FeatureKind[]).map((k) => <option key={k} value={k}>{FEATURE_INFO[k].label}</option>)}
+                </select>
+              </label>
+              <label className="chk" title="Stops at pavement borders even where nearby grass or dirt has a similar color. Turn off for heavily striped lots."><input type="checkbox" checked={wand.stopAtEdges} onChange={(e) => setWand({ ...wand, stopAtEdges: e.target.checked })} /> Stop at edges</label>
+              <label className="chk"><input type="checkbox" checked={wand.holesAsNogo} onChange={(e) => setWand({ ...wand, holesAsNogo: e.target.checked })} /> Mark islands inside as Don't use</label>
+            </div>
+          )}
           {ZONE_KINDS.map((k) => (
             <button key={k} className={`zone ${tool === "feature" && featureKind === k ? "on" : ""}`} onClick={() => { setTool("feature"); setFeatureKind(k); }} title={FEATURE_INFO[k].help}>
               <span><i style={{ background: FEATURE_INFO[k].color }} />{FEATURE_INFO[k].label}</span>
@@ -268,6 +285,7 @@ export default function App() {
             onToolDone={() => setTool("select")}
             onStatus={setStatus}
             onCalibrate={(a, b) => setCalib({ a, b })}
+            wand={wand}
           />
           <div className="hint">{toolHint}{status && <span className="status"> · {status}</span>}</div>
           <div className="legend"><span>Speed:</span><i style={{ background: "hsl(140,90%,50%)" }} />20<i style={{ background: "hsl(70,90%,50%)" }} />42<i style={{ background: "hsl(0,90%,50%)" }} />65+ mph</div>
@@ -439,13 +457,13 @@ function HelpDialog({ onClose }: { onClose(): void }) {
         <h2>Quick start</h2>
         <ol>
           <li><b>Find the site.</b> Search an address or "lat, lng", or import a Google Earth Pro screenshot (<i>Import image</i>, then set its scale) or KML of placemarks you traced in Google Earth.</li>
-          <li><b>Define zones.</b> Under <i>Zones</i>, draw the <b>Course area</b> (where the course may go), the <b>Paddock</b>, and any <b>Don't use</b> areas, plus grid and spectator areas. Draw rectangles with two corner clicks, or switch to Polygon for odd shapes. Then mark light poles, curbs, buildings/fences and surface hazards under <i>Site objects</i>.</li>
+          <li><b>Define zones.</b> The fastest way is <b>Find pavement</b>: click inside a lot or runway and the app outlines it from the aerial photo (Shift-click to add more, adjust Tolerance to grow or shrink). Or draw zones by hand under <i>Site zones</i>: draw the <b>Course area</b> (where the course may go), the <b>Paddock</b>, and any <b>Don't use</b> areas, plus grid and spectator areas. Draw rectangles with two corner clicks, or switch to Polygon for odd shapes. Then mark light poles, curbs, buildings/fences and surface hazards under <i>Site objects</i>.</li>
           <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or click <i>Auto-generate</i>.</li>
           <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (mid‑60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
           <li><b>Drive it.</b> <i>3D run-through</i> drives the simulated line in driver, chase or free-orbit view.</li>
           <li><b>Share.</b> Save the .axcourse project, export KML to view it in Google Earth, or export a printable SVG course map.</li>
         </ol>
-        <p className="small">Keys: V select, L line, C cone, P pointer, G gate, S slalom, W wall, 1 start, 2 finish, A area, M measure, R rotate pointer, Delete remove, Enter finish shape, Esc cancel, Ctrl+Z / Ctrl+Y undo/redo, Ctrl+S save.</p>
+        <p className="small">Keys: F find pavement, V select, L line, C cone, P pointer, G gate, S slalom, W wall, 1 start, 2 finish, A area, M measure, R rotate pointer, Delete remove, Enter finish shape, Esc cancel, Ctrl+Z / Ctrl+Y undo/redo, Ctrl+S save.</p>
         <p className="small">Imagery: Esri World Imagery and USGS The National Map. Speeds come from a point-mass simulation and are estimates. Always walk the course with the Event Chair and Safety Steward.</p>
         <div className="actions"><button className="primary" onClick={onClose}>Got it</button></div>
       </div>
