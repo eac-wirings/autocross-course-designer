@@ -442,7 +442,7 @@ export default function App() {
       </div>
 
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
-      {genOpen && <GenerateDialog course={course} onClose={() => setGenOpen(false)} onApply={(r) => { change({ ...course, line: r.line, cones: r.cones, start: r.start, finish: r.finish }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph.`); }} />}
+      {genOpen && <GenerateDialog course={course} onClose={() => setGenOpen(false)} onApply={(r) => { change({ ...course, line: r.line, cones: r.cones, start: r.start, finish: r.finish }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph.${r.note ? " " + r.note : ""}`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
       {help && <HelpDialog onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
@@ -460,10 +460,25 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
     setBusy(true);
     setMsg("Generating and checking candidate courses…");
     setTimeout(() => {
-      const r = generateCourse(course, { targetLengthFt: target, seed, attempts: 150, technical });
+      // Try the requested length, then shorter ones if the site is too tight.
+      let r: GenResult | null = null;
+      let used = target;
+      const stats = { noStart: 0, noFinish: 0, lengths: [] as number[] };
+      for (const f of [1, 0.75, 0.55, 0.4]) {
+        used = Math.round((target * f) / 100) * 100;
+        if (used < 800) break;
+        r = generateCourse(course, { targetLengthFt: used, seed, attempts: 150, technical, stats, timeBudgetMs: 6000 });
+        if (r) break;
+      }
       setBusy(false);
-      if (!r) { setMsg("Couldn't fit a course. Check that the paved area is large enough after margins (25 ft to obstacles, 75 ft to people), or lower the target length."); return; }
+      if (!r) {
+        setMsg(stats.noStart >= stats.noFinish
+          ? "ERROR:Couldn't find a safe place to start. Make the Course area bigger, or check that Don't-use, obstacle and people zones aren't covering it (margins: 25 ft to obstacles, 75 ft to people, 20 ft to Don't-use)."
+          : `ERROR:Couldn't fit a course with a finish and safe runout (longest attempt ${Math.max(0, ...stats.lengths)} ft). Try a different seed, a more technical style, or a larger Course area.`);
+        return;
+      }
       if (course.cones.length && !confirm(`Replace the current ${course.cones.length} cones and driving line with the generated course? (Undo is available.)`)) return;
+      if (used !== target) r = { ...r, note: `Shortened to fit: asked for ${target} ft.` };
       onApply(r);
     }, 30);
   };
@@ -479,7 +494,7 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
             <label className="row">Seed <input type="number" value={seed} onChange={(e) => setSeed(+e.target.value)} /> <button onClick={() => setSeed(Math.floor(Math.random() * 100000))}>Random</button></label>
           </>
         )}
-        {msg && <p className="small">{msg}</p>}
+        {msg && (msg.startsWith("ERROR:") ? <p className="gen-error">{msg.slice(6)}</p> : <p className="small">{msg}</p>)}
         <div className="actions">
           <button onClick={onClose}>Cancel</button>
           <button className="primary" disabled={!hasPaved || busy} onClick={run}>{busy ? "Working…" : "Generate"}</button>

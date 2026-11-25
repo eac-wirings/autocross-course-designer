@@ -23,6 +23,10 @@ export interface GenOptions {
   attempts: number;
   /** 0 = flowing/open, 1 = technical/tight */
   technical: number;
+  /** Stop searching after this long (default 8 s). */
+  timeBudgetMs?: number;
+  /** Filled in with why attempts failed, for the UI. */
+  stats?: { noStart: number; noFinish: number; lengths: number[] };
 }
 
 export interface GenResult {
@@ -36,6 +40,7 @@ export interface GenResult {
   lengthFt: number;
   timeS: number;
   maxMph: number;
+  note?: string;
 }
 
 type Seg = "launch" | "straight" | "sweeper" | "turn" | "hairpin" | "slalom" | "kink" | "finish";
@@ -44,13 +49,16 @@ interface Node { p: Pt; seg: Seg; segId: number; side: number; R: number }
 const STEP = 2;
 
 export function suggestedLength(c: Course): number {
-  const area = c.features.filter((f) => f.kind === "paved").reduce((a, f) => a + polygonArea(f.pts), 0);
-  if (!area) return 2500;
+  // Usable area: course areas minus Don't-use islands inside them.
+  const paved = c.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+  const holes = c.features.filter((f) => f.kind === "nogo" && f.pts.length >= 3 && paved.some((p) => pointInPolygon(f.pts[0], p.pts)));
+  const area = paved.reduce((a, f) => a + polygonArea(f.pts), 0) - holes.reduce((a, f) => a + polygonArea(f.pts), 0);
+  if (area <= 0) return 2500;
   return Math.round(Math.min(4500, Math.max(1200, Math.sqrt(area) * 3.2)) / 100) * 100;
 }
 
 export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i: number) => void): GenResult | null {
-  const paved = course.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+  const paved = course.features.filter((f) => f.kind === "paved" && f.pts.length >= 3 && polygonArea(f.pts) > 400);
   if (!paved.length) return null;
   const karts = course.settings.karts;
   const solidMargin = (karts ? 50 : 25) + 10;
@@ -75,7 +83,11 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
   const bb = bbox(all);
 
   let best: GenResult | null = null;
+  const t0 = Date.now();
   for (let attempt = 0; attempt < opt.attempts; attempt++) {
+    // Good enough, or taking too long: stop early.
+    if (best && attempt >= 40 && best.errors === 0 && Math.abs(best.lengthFt - opt.targetLengthFt) < opt.targetLengthFt * 0.12) break;
+    if (Date.now() - t0 > (opt.timeBudgetMs ?? 8000)) break;
     onProgress?.(attempt);
     const rnd = mulberry32(opt.seed * 7919 + attempt * 104729);
     const r = attemptOnce(rnd);
@@ -86,7 +98,7 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
     const issues = checkCourse(draft, sim);
     const errors = issues.filter((i) => i.severity === "error").length;
     const warnings = issues.filter((i) => i.severity === "warn").length;
-    const score = errors * 100 + warnings * 12 + Math.abs(sim.lengthFt - opt.targetLengthFt) / 40 + Math.max(0, sim.maxMph - 58) * 8 + Math.max(0, 38 - sim.avgMph) * 2;
+    const score = errors * 100 + warnings * 12 + Math.abs(sim.lengthFt - opt.targetLengthFt) / 15 + Math.max(0, sim.maxMph - 58) * 8 + Math.max(0, 38 - sim.avgMph) * 2;
     if (!best || score < best.score) best = { ...r, score, errors, warnings, lengthFt: sim.lengthFt, timeS: sim.timeS, maxMph: sim.maxMph };
   }
   return best;
@@ -111,7 +123,7 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
         if (ok) { startP = p; startDir = dir; break; }
       }
     }
-    if (!startP) return null;
+    if (!startP) { if (opt.stats) opt.stats.noStart++; return null; }
 
     const nodes: Node[] = [{ p: startP, seg: "launch", segId: 0, side: 0, R: Infinity }];
     let pos = startP;
@@ -156,7 +168,7 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
     length += straightRun;
 
     let stuck = 0;
-    while (length < opt.targetLengthFt * 1.15 && stuck < 30) {
+    while (length < opt.targetLengthFt * 1.15 && stuck < 3) {
       const tech = opt.technical;
       const weights: [Seg, number][] = [
         ["sweeper", 3 - tech * 1.5],
@@ -167,26 +179,37 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
         ["kink", 1.2],
       ];
       const tot = weights.reduce((a, w) => a + Math.max(0, w[1]), 0);
-      let roll = rnd() * tot;
-      let seg: Seg = "turn";
-      for (const [s, w] of weights) { roll -= Math.max(0, w); if (roll <= 0) { seg = s; break; } }
-      const side = rnd() < 0.68 ? -lastSide : lastSide;
-
-      let built: { pts: Pt[]; dir: number; R: number; weave?: number } | null = null;
-      if (seg === "sweeper") { const R = range(65, 125); built = { ...buildArc(R, range(0.7, 2.0), side), R }; }
-      else if (seg === "turn") { const R = range(32, 55); built = { ...buildArc(R, range(1.2, 1.75), side), R }; }
-      else if (seg === "hairpin") { const R = range(28, 34); built = { ...buildArc(R, range(2.6, 3.1), side), R }; }
-      else if (seg === "kink") { const R = range(140, 220); built = { ...buildArc(R, range(0.25, 0.45), side), R }; }
-      else if (seg === "straight") built = { ...buildStraight(range(50, Math.max(60, 170 - straightRun))), R: Infinity };
-      else if (seg === "slalom") {
-        const spacing = range(60, 74);
-        const count = 3 + Math.floor(rnd() * 3);
-        built = { ...buildStraight(spacing * (count + 1)), R: Infinity, weave: spacing };
+      // Try several random pieces and keep the first that fits, so narrow areas
+      // (taxiways, lanes between islands) don't end the walk on one bad roll.
+      let chosen: { seg: Seg; side: number; built: { pts: Pt[]; dir: number; R: number; weave?: number } } | null = null;
+      for (let tryN = 0; tryN < 14 && !chosen; tryN++) {
+        let roll = rnd() * tot;
+        let seg: Seg = "turn";
+        for (const [s, w] of weights) { roll -= Math.max(0, w); if (roll <= 0) { seg = s; break; } }
+        // Later tries lean on tighter pieces, which fit where big ones don't.
+        if (tryN >= 8) seg = (["turn", "kink", "hairpin", "turn", "straight", "kink"] as Seg[])[tryN - 8];
+        const side = rnd() < 0.68 ? -lastSide : lastSide;
+        let built: { pts: Pt[]; dir: number; R: number; weave?: number } | null = null;
+        if (seg === "sweeper") { const R = range(65, 125); built = { ...buildArc(R, range(0.7, 2.0), side), R }; }
+        else if (seg === "turn") { const R = range(32, 55); built = { ...buildArc(R, range(1.2, 1.75), side), R }; }
+        else if (seg === "hairpin") { const R = range(28, 34); built = { ...buildArc(R, range(2.6, 3.1), side), R }; }
+        else if (seg === "kink") { const R = range(140, 220); built = { ...buildArc(R, range(0.25, 0.45), side), R }; }
+        else if (seg === "straight") built = { ...buildStraight(range(40, Math.max(50, 170 - straightRun))), R: Infinity };
+        else if (seg === "slalom") {
+          const spacing = range(60, 74);
+          const count = 3 + Math.floor(rnd() * 3);
+          built = { ...buildStraight(spacing * (count + 1)), R: Infinity, weave: spacing };
+        }
+        if (!built || !built.pts.every((p) => safe(p)) || !selfClear(built.pts, nodes.length)) continue;
+        // Don't drive into a dead end: some room must remain ahead.
+        const end = built.pts[built.pts.length - 1];
+        let room = true;
+        for (let s2 = 10; s2 <= 40; s2 += 10) if (!safe(add(end, scale(fromAngle(built.dir), s2)))) { room = false; break; }
+        if (!room && tryN < 12) continue;
+        chosen = { seg, side, built };
       }
-      if (!built) break;
-
-      const ok = built.pts.every((p) => safe(p)) && selfClear(built.pts, nodes.length);
-      if (!ok) { stuck++; continue; }
+      if (!chosen) { stuck++; continue; }
+      const { seg, side, built } = chosen;
       stuck = 0;
       segId++;
       for (const p of built.pts) nodes.push({ p, seg, segId, side, R: built.weave ?? built.R });
@@ -198,9 +221,9 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
       if (seg !== "straight" && seg !== "slalom") lastSide = side;
 
       // Could the course finish here? Need a finish straight + runout that's clear.
-      if (length > opt.targetLengthFt * 0.6 && seg !== "slalom" && straightRun < 80) {
+      if (length > opt.targetLengthFt * 0.5 && seg !== "slalom" && straightRun < 80) {
         const finLen = 70;
-        const runout = 260;
+        const runout = 220;
         let fits = true;
         for (let s = STEP; s <= finLen + runout; s += 10) {
           const q = add(pos, scale(fromAngle(dir), s));
@@ -212,7 +235,8 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
         }
       }
     }
-    if (!bestCut) return null;
+    if (opt.stats) opt.stats.lengths.push(Math.round(length));
+    if (!bestCut) { if (opt.stats) opt.stats.noFinish++; return null; }
 
     const kept = nodes.slice(0, bestCut.idx);
     pos = bestCut.pos;

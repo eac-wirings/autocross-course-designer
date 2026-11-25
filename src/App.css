@@ -104,3 +104,4 @@
 .run3d-bar .seg button:first-child { border-radius: 6px 0 0 6px; }
 .run3d-bar .seg button:last-child { border-radius: 0 6px 6px 0; }
 .run3d-bar .seg button.on { background: var(--accent); color: #111; }
+.gen-error { color: #fecaca; background: #7f1d1d; border: 1px solid #ef4444; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
