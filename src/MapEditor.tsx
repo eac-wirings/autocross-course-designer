@@ -1,7 +1,7 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
-import { FT_PER_S_PER_MPH, add, dist, heading, norm, perp, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
+import { FT_PER_S_PER_MPH, add, dist, heading, norm, perp, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
 import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type FeatureKind } from "./model";
 import type { Issue } from "./rules";
 import type { SimResult } from "./sim";
@@ -61,6 +61,8 @@ function coneIcon(c: Cone, selected: boolean) {
 }
 
 const vertexIcon = L.divIcon({ className: "", iconSize: [10, 10], iconAnchor: [5, 5], html: `<div style="width:10px;height:10px;background:#fff;border:2px solid #2563eb;border-radius:2px"></div>` });
+
+const midIcon = L.divIcon({ className: "", iconSize: [8, 8], iconAnchor: [4, 4], html: `<div style="width:8px;height:8px;background:rgba(255,255,255,.55);border:1px solid #2563eb;border-radius:50%"></div>` });
 
 function speedColor(mph: number) {
   const t = Math.max(0, Math.min(1, (mph - 20) / 45));
@@ -144,6 +146,11 @@ export default function MapEditor(props: Props) {
       const P = latest.current;
       if (e.key === "Escape") { setPending([]); P.onToolDone(); }
       if (e.key === "Enter") finishMulti();
+      if (e.key === "Backspace" && pendingRef.current.length) {
+        e.preventDefault();
+        setPending(pendingRef.current.slice(0, -1));
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && P.selection) {
         const s = P.selection;
         const c = P.course;
@@ -165,6 +172,13 @@ export default function MapEditor(props: Props) {
 
   // reset pending when tool changes
   useEffect(() => { setPending([]); }, [props.tool, props.featureKind]);
+
+  /** Screen distance in pixels between two local points. */
+  function pxDist(a: Pt, b: Pt, c: Course) {
+    const map = mapRef.current!;
+    const A = toLatLng(a, c.origin), B = toLatLng(b, c.origin);
+    return map.latLngToContainerPoint([A.lat, A.lng]).distanceTo(map.latLngToContainerPoint([B.lat, B.lng]));
+  }
 
   /** Pointer cones default to aiming at the nearest point of the driving line. */
   function nearestLineDir(p: Pt): number {
@@ -190,11 +204,17 @@ export default function MapEditor(props: Props) {
         const pend = pendingRef.current;
         if (!pend.length) { if (c !== P.course) P.onChange(c); setPending([p]); return; }
         setPending([]);
+        if (Math.abs(p.x - pend[0].x) < 3 || Math.abs(p.y - pend[0].y) < 3) { P.onStatus("Rectangle too small; click two opposite corners."); return; }
         P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: rectPts(pend[0], p), closed: true }] });
         return;
       }
       if (c !== P.course) P.onChange(c); // origin moved
-      setPending([...pendingRef.current, p]);
+      const pend = pendingRef.current;
+      // Clicking back on the first point closes the shape.
+      if (pend.length >= 3 && info.closed && pxDist(pend[0], p, c) < 12) { finishMulti(); return; }
+      // Ignore the duplicate click a double-click produces.
+      if (pend.length && pxDist(pend[pend.length - 1], p, c) < 4) return;
+      setPending([...pend, p]);
       return;
     }
     if (TWO_CLICK.includes(tool)) {
@@ -242,6 +262,7 @@ export default function MapEditor(props: Props) {
     if (P.tool === "feature" && pend.length >= 2) {
       const info = FEATURE_INFO[P.featureKind];
       const closed = info.closed && pend.length >= 3;
+      if (info.closed && (!closed || polygonArea(pend) < 10)) { P.onStatus("An area needs at least 3 corners."); return; }
       P.onChange({ ...P.course, features: [...P.course.features, { id: uid("f"), kind: P.featureKind, pts: pend, closed }] });
       setPending([]);
     } else if (P.tool === "line") P.onToolDone();
@@ -268,7 +289,11 @@ export default function MapEditor(props: Props) {
       L.tooltip({ permanent: true, direction: "right", offset: [10, 0], className: "measure-tip" }).setLatLng(ll(m)).setContent(`${Math.abs(m.x - pend[0].x).toFixed(0)} × ${Math.abs(m.y - pend[0].y).toFixed(0)} ft`).addTo(tmp);
       return;
     }
-    L.polyline(pts.map(ll), { color: col, weight: 2, dashArray: "5 5", interactive: false }).addTo(tmp);
+    if (P.tool === "feature" && FEATURE_INFO[P.featureKind].closed) {
+      // Polygon in progress: filled preview with the closing edge, and vertex dots.
+      L.polygon(pts.map(ll), { color: col, weight: 2, dashArray: "5 5", fillOpacity: 0.12, interactive: false }).addTo(tmp);
+      pend.forEach((q, i) => L.circleMarker(ll(q), { radius: i === 0 ? 7 : 4, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1, interactive: false }).addTo(tmp));
+    } else L.polyline(pts.map(ll), { color: col, weight: 2, dashArray: "5 5", interactive: false }).addTo(tmp);
     if (m && pend.length) {
       const d = dist(pend[pend.length - 1], m);
       L.tooltip({ permanent: true, direction: "right", offset: [10, 0], className: "measure-tip" }).setLatLng(ll(m)).setContent(`${d.toFixed(0)} ft`).addTo(tmp);
@@ -315,6 +340,16 @@ export default function MapEditor(props: Props) {
             const P = latest.current;
             P.onChange({ ...P.course, features: P.course.features.map((x) => (x.id === f.id ? { ...x, pts: x.pts.map((v, j) => (j === i ? q : v)) } : x)) });
           });
+          // Midpoint handle after this vertex: drag it to insert a new corner.
+          const nxt = f.pts[(i + 1) % f.pts.length];
+          if (f.pts.length >= 2 && (f.closed || i < f.pts.length - 1)) {
+            const mid = L.marker(ll({ x: (p.x + nxt.x) / 2, y: (p.y + nxt.y) / 2 }), { icon: midIcon, draggable: true, title: "Drag to add a corner" }).addTo(layer);
+            mid.on("dragend", () => {
+              const q = toLocal({ lat: mid.getLatLng().lat, lng: mid.getLatLng().lng }, o);
+              const P = latest.current;
+              P.onChange({ ...P.course, features: P.course.features.map((x) => (x.id === f.id ? { ...x, pts: [...x.pts.slice(0, i + 1), q, ...x.pts.slice(i + 1)] } : x)) });
+            });
+          }
           mk.on("contextmenu", () => {
             const P = latest.current;
             if (f.pts.length <= (f.closed ? 3 : 2)) return;

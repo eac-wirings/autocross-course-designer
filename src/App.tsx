@@ -41,7 +41,7 @@ export default function App() {
   const [tool, setTool] = useState<Tool>("select");
   const [featureKind, setFeatureKind] = useState<FeatureKind>("paved");
   const [selection, setSelection] = useState<Selection>(null);
-  const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6, zoneShape: "rect" });
+  const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6, zoneShape: "polygon" });
   const [basemap, setBasemap] = useState<Basemap>("esri");
   const [status, setStatus] = useState("");
   const [show3D, setShow3D] = useState(false);
@@ -159,7 +159,7 @@ export default function App() {
     setStatus(`Image scale set: ${(im.w * f / im.pxW).toFixed(3)} ft per pixel.`);
   }
 
-  const toolHint = tool === "feature" ? FEATURE_INFO[featureKind].help + (FEATURE_INFO[featureKind].point ? " Click to place." : FEATURE_INFO[featureKind].closed && options.zoneShape === "rect" ? " Click two opposite corners." : " Click points, Enter to finish.") : tool === "calibrate" ? "Click two points a known distance apart on the image." : tool === "image-move" ? "Click where the image center should go." : TOOLS.find((t) => t.id === tool)?.hint;
+  const toolHint = tool === "feature" ? FEATURE_INFO[featureKind].help + (FEATURE_INFO[featureKind].point ? " Click to place." : FEATURE_INFO[featureKind].closed && options.zoneShape === "rect" ? " Click two opposite corners." : " Click each corner, then click the first point (or double-click / Enter) to close. Backspace removes the last point, Esc cancels.") : tool === "calibrate" ? "Click two points a known distance apart on the image." : tool === "image-move" ? "Click where the image center should go." : TOOLS.find((t) => t.id === tool)?.hint;
 
   const selCone = selection?.type === "cone" ? course.cones.find((k) => k.id === selection.id) : undefined;
   const selFeat = selection?.type === "feature" ? course.features.find((f) => f.id === selection.id) : undefined;
@@ -213,8 +213,8 @@ export default function App() {
           ))}
           {tool === "feature" && FEATURE_INFO[featureKind].closed && (
             <div className="seg-row">
-              {(["rect", "polygon"] as const).map((s) => (
-                <button key={s} className={options.zoneShape === s ? "on" : ""} onClick={() => setOptions({ ...options, zoneShape: s })}>{s === "rect" ? "Rectangle" : "Polygon"}</button>
+              {(["polygon", "rect"] as const).map((s) => (
+                <button key={s} className={options.zoneShape === s ? "on" : ""} onClick={() => setOptions({ ...options, zoneShape: s })}>{s === "rect" ? "Rectangle" : "Multi-point"}</button>
               ))}
             </div>
           )}

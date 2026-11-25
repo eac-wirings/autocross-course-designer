@@ -29,7 +29,11 @@
 .tools .opts { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
 .tools .opts label { display: flex; align-items: center; gap: 4px; justify-content: space-between; }
 .tools .opts input[type=number] { width: 54px; }
-.mapwrap { flex: 1; position: relative; min-width: 0; }
+/* The map must never paint over the menus. WebView2 can fail to clip Leaflet's
+   transformed tile panes, so clip here as well and keep the menus on a higher layer. */
+.mapwrap { flex: 1; position: relative; min-width: 0; overflow: hidden; isolation: isolate; contain: paint; }
+.topbar, .tools, .panel { position: relative; z-index: 1100; }
+.tools, .panel { flex: none; }
 .map { position: absolute; inset: 0; background: #1b222b; }
 .map.tool-select { cursor: default; }
 .map:not(.tool-select) .leaflet-container, .map:not(.tool-select) { cursor: crosshair; }
