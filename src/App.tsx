@@ -4,7 +4,8 @@ import { dist, type Pt } from "./geo";
 import { generateCourse, suggestedLength, type GenResult } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions } from "./MapEditor";
-import { CAR_PRESETS, FEATURE_INFO, newCourse, type Course, type FeatureKind } from "./model";
+import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Course, type FeatureKind } from "./model";
+import { polygonArea } from "./geo";
 import { checkCourse, type Issue } from "./rules";
 import Run3D from "./Run3D";
 import { simulate } from "./sim";
@@ -29,7 +30,7 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: "wall", label: "Cone wall", key: "W", hint: "Click both ends; cones every wall spacing." },
   { id: "start", label: "Start line", key: "1", hint: "Click both timing lights of the start." },
   { id: "finish", label: "Finish line", key: "2", hint: "Click both timing lights of the finish." },
-  { id: "feature", label: "Site area / object", key: "A", hint: "Click points around the area, Enter or double-click to close it." },
+  { id: "feature", label: "Zone / site object", key: "A", hint: "Click points around the area, Enter or double-click to close it." },
   { id: "measure", label: "Measure", key: "M", hint: "Click two points to measure distance." },
 ];
 
@@ -40,7 +41,7 @@ export default function App() {
   const [tool, setTool] = useState<Tool>("select");
   const [featureKind, setFeatureKind] = useState<FeatureKind>("paved");
   const [selection, setSelection] = useState<Selection>(null);
-  const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6 });
+  const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6, zoneShape: "rect" });
   const [basemap, setBasemap] = useState<Basemap>("esri");
   const [status, setStatus] = useState("");
   const [show3D, setShow3D] = useState(false);
@@ -158,7 +159,7 @@ export default function App() {
     setStatus(`Image scale set: ${(im.w * f / im.pxW).toFixed(3)} ft per pixel.`);
   }
 
-  const toolHint = tool === "feature" ? FEATURE_INFO[featureKind].help + (FEATURE_INFO[featureKind].point ? " Click to place." : " Click points, Enter to finish.") : tool === "calibrate" ? "Click two points a known distance apart on the image." : tool === "image-move" ? "Click where the image center should go." : TOOLS.find((t) => t.id === tool)?.hint;
+  const toolHint = tool === "feature" ? FEATURE_INFO[featureKind].help + (FEATURE_INFO[featureKind].point ? " Click to place." : FEATURE_INFO[featureKind].closed && options.zoneShape === "rect" ? " Click two opposite corners." : " Click points, Enter to finish.") : tool === "calibrate" ? "Click two points a known distance apart on the image." : tool === "image-move" ? "Click where the image center should go." : TOOLS.find((t) => t.id === tool)?.hint;
 
   const selCone = selection?.type === "cone" ? course.cones.find((k) => k.id === selection.id) : undefined;
   const selFeat = selection?.type === "feature" ? course.features.find((f) => f.id === selection.id) : undefined;
@@ -198,21 +199,43 @@ export default function App() {
 
       <div className="body">
         <aside className="tools">
-          {TOOLS.map((t) => (
-            <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
-              <span>{t.label}</span><kbd>{t.key}</kbd>
+          <div className="seg-row">
+            {TOOLS.filter((t) => t.id === "select" || t.id === "measure").map((t) => (
+              <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>{t.id === "select" ? "Select" : "Measure"} <kbd>{t.key}</kbd></button>
+            ))}
+          </div>
+
+          <div className="section-title"><b>1</b> Site zones</div>
+          {ZONE_KINDS.map((k) => (
+            <button key={k} className={`zone ${tool === "feature" && featureKind === k ? "on" : ""}`} onClick={() => { setTool("feature"); setFeatureKind(k); }} title={FEATURE_INFO[k].help}>
+              <span><i style={{ background: FEATURE_INFO[k].color }} />{FEATURE_INFO[k].label}</span>
             </button>
           ))}
-          {tool === "feature" && (
-            <div className="sub">
-              {(Object.keys(FEATURE_INFO) as FeatureKind[]).map((k) => (
-                <label key={k} className={featureKind === k ? "on" : ""}>
-                  <input type="radio" checked={featureKind === k} onChange={() => setFeatureKind(k)} />
-                  <i style={{ background: FEATURE_INFO[k].color }} />{FEATURE_INFO[k].label}
-                </label>
+          {tool === "feature" && FEATURE_INFO[featureKind].closed && (
+            <div className="seg-row">
+              {(["rect", "polygon"] as const).map((s) => (
+                <button key={s} className={options.zoneShape === s ? "on" : ""} onClick={() => setOptions({ ...options, zoneShape: s })}>{s === "rect" ? "Rectangle" : "Polygon"}</button>
               ))}
             </div>
           )}
+
+          <div className="section-sub">Site objects</div>
+          {(Object.keys(FEATURE_INFO) as FeatureKind[]).filter((k) => !ZONE_KINDS.includes(k)).map((k) => (
+            <button key={k} className={`zone ${tool === "feature" && featureKind === k ? "on" : ""}`} onClick={() => { setTool("feature"); setFeatureKind(k); }} title={FEATURE_INFO[k].help}>
+              <span><i style={{ background: FEATURE_INFO[k].color }} />{FEATURE_INFO[k].label}</span>
+            </button>
+          ))}
+
+          {([["2", "Timing", ["start", "finish"]], ["3", "Course", ["cone", "pointer", "gate", "slalom", "wall", "line"]]] as const).map(([n, title, ids]) => (
+            <div key={n} className="tool-group">
+              <div className="section-title"><b>{n}</b> {title}</div>
+              {ids.map((id) => TOOLS.find((t) => t.id === id)!).map((t) => (
+                <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
+                  <span>{t.label}</span><kbd>{t.key}</kbd>
+                </button>
+              ))}
+            </div>
+          ))}
           <div className="opts">
             <label>Slalom spacing <input type="number" min={30} max={120} value={options.slalomSpacing} onChange={(e) => setOptions({ ...options, slalomSpacing: +e.target.value || 66 })} /> ft</label>
             <label>Wall spacing <input type="number" min={2} max={30} value={options.wallSpacing} onChange={(e) => setOptions({ ...options, wallSpacing: +e.target.value || 6 })} /> ft</label>
@@ -297,6 +320,27 @@ export default function App() {
               )}
             </section>
           )}
+
+          <section>
+            <h3>Zones</h3>
+            {course.features.filter((f) => ZONE_KINDS.includes(f.kind) && f.closed).length === 0 ? (
+              <div className="small">No zones yet. Start with <b>1 Site zones → Course area</b> to mark where the course may go, then Paddock and Don't use.</div>
+            ) : (
+              <ul className="zones">
+                {course.features.filter((f) => ZONE_KINDS.includes(f.kind) && f.closed).map((f) => {
+                  const sqft = polygonArea(f.pts);
+                  const sel = selection?.type === "feature" && selection.id === f.id;
+                  return (
+                    <li key={f.id} className={sel ? "on" : ""} onClick={() => { setTool("select"); setSelection({ type: "feature", id: f.id }); mapRef.current?.focus({ x: f.pts.reduce((a, p) => a + p.x, 0) / f.pts.length, y: f.pts.reduce((a, p) => a + p.y, 0) / f.pts.length }); }}>
+                      <i style={{ background: FEATURE_INFO[f.kind].color }} />
+                      <span>{f.label || FEATURE_INFO[f.kind].label}</span>
+                      <em>{sqft >= 43560 ? `${(sqft / 43560).toFixed(2)} ac` : `${Math.round(sqft).toLocaleString()} ft²`}</em>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
 
           <section className="checks">
             <h3>Safety & rules check <span className={`badge ${errors ? "err" : warns ? "warn" : "ok"}`}>{errors ? `${errors} error${errors > 1 ? "s" : ""}` : warns ? `${warns} warning${warns > 1 ? "s" : ""}` : "OK"}</span></h3>
@@ -395,7 +439,7 @@ function HelpDialog({ onClose }: { onClose(): void }) {
         <h2>Quick start</h2>
         <ol>
           <li><b>Find the site.</b> Search an address or "lat, lng", or import a Google Earth Pro screenshot (<i>Import image</i>, then set its scale) or KML of placemarks you traced in Google Earth.</li>
-          <li><b>Map the site.</b> With <i>Site area / object</i>, outline the <b>paved area</b>, then mark light poles, curbs, buildings/fences, surface hazards (holes, grates, gravel), spectator, paddock and grid areas.</li>
+          <li><b>Define zones.</b> Under <i>Zones</i>, draw the <b>Course area</b> (where the course may go), the <b>Paddock</b>, and any <b>Don't use</b> areas, plus grid and spectator areas. Draw rectangles with two corner clicks, or switch to Polygon for odd shapes. Then mark light poles, curbs, buildings/fences and surface hazards under <i>Site objects</i>.</li>
           <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or click <i>Auto-generate</i>.</li>
           <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (mid‑60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
           <li><b>Drive it.</b> <i>3D run-through</i> drives the simulated line in driver, chase or free-orbit view.</li>

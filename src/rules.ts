@@ -65,7 +65,7 @@ export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
   const paved = c.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
 
   // --- Setup completeness -------------------------------------------------
-  if (paved.length === 0) issues.push({ severity: "warn", title: "No paved area outlined", detail: "Outline the usable pavement so the checker can confirm everything stays on it." });
+  if (paved.length === 0) issues.push({ severity: "warn", title: "No course area defined", detail: "Use Zones → Course area to outline where the course may go, so the checker can confirm everything stays on it." });
   if (c.line.length < 2) issues.push({ severity: "warn", title: "No driving line", detail: "Draw the intended driving line from start to finish. Speed, margin, and 3D checks depend on it." });
   if (!c.start) issues.push({ severity: "warn", title: "No start line", detail: "Place the start timing line." });
   if (!c.finish) issues.push({ severity: "warn", title: "No finish line", detail: "Place the finish timing line." });
@@ -81,7 +81,7 @@ export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
         firstOff ??= cp;
       }
     }
-    if (firstOff) issues.push({ severity: "error", title: "Course leaves the pavement", detail: `${offCount} course point(s) are outside the paved area, first: ${firstOff.what}.`, at: firstOff.p });
+    if (firstOff) issues.push({ severity: "error", title: "Course leaves the course area", detail: `${offCount} course point(s) are outside the course area, first: ${firstOff.what}.`, at: firstOff.p });
 
     // Fast sections close to the pavement edge: cars slide much farther on grass/dirt.
     if (sim) {
@@ -122,6 +122,15 @@ export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
   for (const f of c.features.filter((f) => f.kind === "surface")) {
     const r = closest(pts, f);
     if (r && r.d < 4) issues.push({ severity: "error", title: `${f.label || "Surface hazard"} on the course`, detail: "Route around holes, grates, manholes, gravel and broken pavement, even if it only takes moving a cone or two.", at: r.cp.p });
+  }
+
+  // --- Don't-use zones ------------------------------------------------------
+  for (const f of c.features.filter((f) => f.kind === "nogo" && f.pts.length >= 3)) {
+    const r = closest(pts, f);
+    if (!r) continue;
+    const name = f.label || "Don't-use zone";
+    if (r.d <= 0) issues.push({ severity: "error", title: `Course enters ${name}`, detail: `A ${r.cp.what} is inside an area marked as off limits.`, at: r.cp.p });
+    else if (r.d < 10) issues.push({ severity: "warn", title: `${name}: only ${fmt(r.d)} ft away`, detail: "Leave some room so a car that runs wide doesn't end up in the off-limits area.", at: r.cp.p });
   }
 
   // --- Speed -----------------------------------------------------------------

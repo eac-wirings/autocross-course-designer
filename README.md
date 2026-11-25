@@ -6,7 +6,8 @@ It runs on Windows, macOS and Linux, needs no account or subscription, and does 
 ## Features
 
 - **Site map.** Free aerial imagery (Esri World Imagery, or USGS public-domain imagery in the US). You can also import a Google Earth Pro screenshot and set its scale with two clicks, or import placemarks traced in Google Earth (KML/KMZ).
-- **Site features.** Mark the paved area, light poles and trees, curbs, buildings and fences, surface hazards (holes, grates, gravel), spectator areas, paddock, grid, and worker stations.
+- **Zones.** Draw the course area (where the course may go), the paddock, and don't-use areas, plus the grid and spectator areas. Draw rectangles with two clicks, or polygons for odd shapes. The checker and generator keep the course inside the course area and out of don't-use zones.
+- **Site objects.** Mark light poles and trees, curbs, buildings and fences, surface hazards (holes, grates, gravel), and worker stations.
 - **Course tools.** Driving line, standing cones, pointer cones, gates, slaloms with set spacing, cone walls, start and finish timing lines, and a measuring tool. Includes undo/redo.
 - **Live safety and rules check**, based on the SCCA Solo Rules and the Solo Course Designer training:
   - 25 ft from the course to solid objects (50 ft when karts run, except curbs)

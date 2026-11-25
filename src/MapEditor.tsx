@@ -12,7 +12,7 @@ export type Tool =
 
 export type Selection = { type: "cone"; id: string } | { type: "feature"; id: string } | { type: "line" } | null;
 
-export interface ToolOptions { gateWidth: number; slalomSpacing: number; wallSpacing: number }
+export interface ToolOptions { gateWidth: number; slalomSpacing: number; wallSpacing: number; zoneShape: "rect" | "polygon" }
 
 export type Basemap = "esri" | "usgs" | "osm" | "none";
 
@@ -45,6 +45,8 @@ const TILES: Record<Exclude<Basemap, "none">, { url: string; attribution: string
   usgs: { url: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}", attribution: "Imagery: USGS The National Map (public domain)", maxNative: 16 },
   osm: { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap contributors", maxNative: 19 },
 };
+
+const rectPts = (a: Pt, b: Pt): Pt[] => [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }];
 
 const TWO_CLICK: Tool[] = ["gate", "slalom", "wall", "start", "finish", "calibrate", "measure"];
 
@@ -184,6 +186,13 @@ export default function MapEditor(props: Props) {
     if (tool === "feature") {
       const info = FEATURE_INFO[P.featureKind];
       if (info.point) { P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: [p], closed: false }] }); return; }
+      if (P.options.zoneShape === "rect" && info.closed) {
+        const pend = pendingRef.current;
+        if (!pend.length) { if (c !== P.course) P.onChange(c); setPending([p]); return; }
+        setPending([]);
+        P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: rectPts(pend[0], p), closed: true }] });
+        return;
+      }
       if (c !== P.course) P.onChange(c); // origin moved
       setPending([...pendingRef.current, p]);
       return;
@@ -253,6 +262,12 @@ export default function MapEditor(props: Props) {
     }
     if (!pend.length) return;
     const col = P.tool === "feature" ? FEATURE_INFO[P.featureKind].color : "#38bdf8";
+    if (P.tool === "feature" && P.options.zoneShape === "rect" && FEATURE_INFO[P.featureKind].closed && m) {
+      const r = rectPts(pend[0], m);
+      L.polygon(r.map(ll), { color: col, weight: 2, dashArray: "5 5", fillOpacity: 0.15, interactive: false }).addTo(tmp);
+      L.tooltip({ permanent: true, direction: "right", offset: [10, 0], className: "measure-tip" }).setLatLng(ll(m)).setContent(`${Math.abs(m.x - pend[0].x).toFixed(0)} × ${Math.abs(m.y - pend[0].y).toFixed(0)} ft`).addTo(tmp);
+      return;
+    }
     L.polyline(pts.map(ll), { color: col, weight: 2, dashArray: "5 5", interactive: false }).addTo(tmp);
     if (m && pend.length) {
       const d = dist(pend[pend.length - 1], m);
@@ -284,7 +299,7 @@ export default function MapEditor(props: Props) {
     for (const f of c.features) {
       const info = FEATURE_INFO[f.kind];
       const sel = selection?.type === "feature" && selection.id === f.id;
-      const style = { color: info.color, weight: sel ? 3 : 2, fillOpacity: f.kind === "paved" ? 0.08 : 0.28, dashArray: f.kind === "paved" ? "6 4" : undefined };
+      const style = { color: info.color, weight: sel ? 3 : 2, fillOpacity: f.kind === "paved" ? 0.1 : f.kind === "nogo" ? 0.35 : 0.28, dashArray: f.kind === "paved" ? "6 4" : f.kind === "nogo" ? "2 4" : undefined };
       let shape: L.Layer;
       if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
       else if (f.closed) shape = L.polygon(f.pts.map(ll), style);

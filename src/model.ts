@@ -24,7 +24,11 @@ export type FeatureKind =
   | "spectator" // unprotected viewing area
   | "paddock"
   | "grid"
+  | "nogo" // don't use: grass, closed sections, areas the site owner excluded
   | "worker"; // worker station (single point)
+
+/** The zone types shown first in the UI: where the course goes, where people park, and what's off limits. */
+export const ZONE_KINDS: FeatureKind[] = ["paved", "paddock", "nogo", "grid", "spectator"];
 
 export interface Feature {
   id: string;
@@ -90,13 +94,14 @@ export const CAR_PRESETS: CarProfile[] = [
 ];
 
 export const FEATURE_INFO: Record<FeatureKind, { label: string; color: string; closed: boolean; point: boolean; help: string }> = {
-  paved: { label: "Paved area", color: "#64748b", closed: true, point: false, help: "Outline the usable pavement. Cones and the driving line must stay inside." },
+  paved: { label: "Course area", color: "#38bdf8", closed: true, point: false, help: "Where the course may go (usable pavement). Cones and the driving line must stay inside. You can draw several." },
+  nogo: { label: "Don't use", color: "#e11d48", closed: true, point: false, help: "Off limits: grass, closed or broken sections, areas the site owner excluded. The course must stay out of it." },
   obstacle: { label: "Solid obstacle", color: "#dc2626", closed: true, point: false, help: "Buildings, fences, walls, planters. 25 ft minimum margin (50 ft with karts)." },
   pole: { label: "Light pole / tree", color: "#b91c1c", closed: false, point: true, help: "Single solid object. 25 ft minimum margin (50 ft with karts)." },
   curb: { label: "Curb", color: "#f97316", closed: false, point: false, help: "Curb line. 25 ft minimum margin, karts do not raise it." },
   surface: { label: "Surface hazard", color: "#a16207", closed: true, point: false, help: "Holes, grates, manholes, gravel, broken pavement. The course must avoid them." },
   spectator: { label: "Spectator area", color: "#7c3aed", closed: true, point: false, help: "Unprotected viewing area. 75 ft minimum margin." },
-  paddock: { label: "Paddock", color: "#2563eb", closed: true, point: false, help: "Paddock. 75 ft minimum margin; finish must not aim here." },
+  paddock: { label: "Paddock", color: "#a3e635", closed: true, point: false, help: "Paddock. 75 ft minimum margin; finish must not aim here." },
   grid: { label: "Grid", color: "#0891b2", closed: true, point: false, help: "Grid / staging. 75 ft minimum margin; finish must not aim here." },
   worker: { label: "Worker station", color: "#16a34a", closed: false, point: true, help: "Course worker station. Should cover the course and sit away from the car path." },
 };

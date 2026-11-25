@@ -109,6 +109,8 @@ export function deserialize(text: string): Course {
 // ---------------------------------------------------------------- KML
 
 const KIND_KEYWORDS: [RegExp, FeatureKind][] = [
+  [/no[\s-]?go|don'?t use|do not use|keep out|off[\s-]?limits|closed|exclud|grass/i, "nogo"],
+  [/course area|race area|racing area|competition area/i, "paved"],
   [/spectat|viewing|crowd|bleacher/i, "spectator"],
   [/paddock|parking/i, "paddock"],
   [/grid|staging/i, "grid"],

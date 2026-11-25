@@ -58,6 +58,7 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
   const solids = of(["obstacle", "pole", "curb"]);
   const people = of(["spectator", "paddock", "grid"]);
   const surface = of(["surface"]);
+  const nogo = of(["nogo"]).filter((f) => f.pts.length >= 3);
   const grid = of(["grid"])[0];
 
   const safe = (p: Pt, edge = 18, peopleMargin = 90) => {
@@ -66,6 +67,7 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
     for (const f of solids) if (distToShape(p, f.pts, f.closed) < (f.kind === "curb" ? 35 : solidMargin)) return false;
     for (const f of people) if (distToShape(p, f.pts, f.closed) < peopleMargin) return false;
     for (const f of surface) if (distToShape(p, f.pts, f.closed) < 10) return false;
+    for (const f of nogo) if (distToShape(p, f.pts, true) < 20) return false;
     return true;
   };
 

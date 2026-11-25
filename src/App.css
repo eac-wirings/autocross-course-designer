@@ -7,6 +7,17 @@
 .topbar .search input { width: 100%; }
 .body { flex: 1; display: flex; min-height: 0; }
 .tools { width: 190px; background: var(--panel); border-right: 1px solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.tools .section-title { margin: 10px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.tools .section-title b { background: var(--accent); color: #111; border-radius: 50%; width: 16px; height: 16px; display: inline-grid; place-items: center; font-size: 10px; }
+.tools .section-sub { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.tools .tool-group { display: flex; flex-direction: column; gap: 4px; }
+.tools .tool-group > button, .tools > button { display: flex; justify-content: space-between; align-items: center; text-align: left; }
+.tools .tool-group > button.on { border-color: var(--accent); background: #3a2414; }
+.tools .zone span { display: flex; align-items: center; gap: 8px; }
+.tools .zone i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.tools .seg-row { display: flex; gap: 4px; }
+.tools .seg-row button { flex: 1; display: flex; justify-content: center; gap: 6px; align-items: center; }
+.tools .seg-row button.on { border-color: var(--accent); background: #3a2414; }
 .tools > button { display: flex; justify-content: space-between; align-items: center; text-align: left; }
 .tools > button.on { border-color: var(--accent); background: #3a2414; }
 .tools kbd { font-family: inherit; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
@@ -40,6 +51,13 @@
 .props label, .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .row.chk { justify-content: flex-start; }
 .row select { max-width: 200px; }
+.zones { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.zones li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; background: #0f141a; cursor: pointer; border: 1px solid transparent; }
+.zones li:hover { background: #1a222c; }
+.zones li.on { border-color: var(--accent); }
+.zones li i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.zones li span { flex: 1; }
+.zones li em { font-style: normal; color: var(--muted); font-size: 12px; }
 .badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; }
 .badge.err { background: #7f1d1d; color: #fecaca; }
 .badge.warn { background: #78350f; color: #fde68a; }
