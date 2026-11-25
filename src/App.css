@@ -16,6 +16,10 @@
 .tools .zone span { display: flex; align-items: center; gap: 8px; }
 .tools .zone i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .tools .seg-row { display: flex; gap: 4px; }
+.tools .edit-row button { font-size: 12px; padding: 5px 4px; }
+.props .seg-row { display: flex; gap: 4px; }
+.props .seg-row button { flex: 1; font-size: 12px; padding: 5px 4px; }
+.props .seg-row button.on { border-color: var(--accent); background: #3a2414; }
 .tools .wand { display: flex; justify-content: space-between; align-items: center; border-color: #0e7490; background: #0c2a33; }
 .tools .wand.on { border-color: var(--accent); background: #3a2414; }
 .tools .wand-opts { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: #0f141a; border-radius: 6px; }

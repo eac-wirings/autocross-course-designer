@@ -7,6 +7,7 @@ It runs on Windows, macOS and Linux, needs no account or subscription, and does 
 
 - **Site map.** Free aerial imagery (Esri World Imagery, or USGS public-domain imagery in the US). You can also import a Google Earth Pro screenshot and set its scale with two clicks, or import placemarks traced in Google Earth (KML/KMZ).
 - **Find pavement (magic wand).** Click inside a parking lot or runway and the app outlines it from the aerial photo, offline and with no API key. Grass infields become Don't-use zones. Shift-click to add more areas, and use the Tolerance slider to grow or shrink the result.
+- **Shape editing.** Fix outlines without moving points one by one. **Cut away**: draw a shape to remove part of a zone (straight-edged cuts, splits, or holes). **Add area**: draw a shape to merge in. **Straighten**: click two corners and everything between becomes one straight edge. **Smooth edges**: a slider that removes wiggles.
 - **Zones.** Draw the course area (where the course may go), the paddock, and don't-use areas, plus the grid and spectator areas. Draw rectangles with two clicks, or polygons for odd shapes. The checker and generator keep the course inside the course area and out of don't-use zones.
 - **Site objects.** Mark light poles and trees, curbs, buildings and fences, surface hazards (holes, grates, gravel), and worker stations.
 - **Course tools.** Driving line, standing cones, pointer cones, gates, slaloms with set spacing, cone walls, start and finish timing lines, and a measuring tool. Includes undo/redo.

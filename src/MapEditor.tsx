@@ -4,12 +4,13 @@ import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "reac
 import { FT_PER_S_PER_MPH, add, dist, heading, norm, perp, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
 import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type Feature, type FeatureKind } from "./model";
 import type { Issue } from "./rules";
+import { straightenEdge } from "./shapes";
 import { DEFAULT_WAND, prepareImage, runWand, type WandImage } from "./wand";
 import type { SimResult } from "./sim";
 
 export type Tool =
   | "select" | "cone" | "pointer" | "gate" | "slalom" | "wall" | "line" | "feature"
-  | "start" | "finish" | "calibrate" | "image-move" | "measure" | "wand";
+  | "start" | "finish" | "calibrate" | "image-move" | "measure" | "wand" | "cut" | "add" | "straighten";
 
 export interface WandSettings { tolerance: number; kind: FeatureKind; holesAsNogo: boolean; stopAtEdges: boolean }
 
@@ -41,6 +42,8 @@ interface Props {
   onStatus(s: string): void;
   onCalibrate(a: Pt, b: Pt): void;
   wand: WandSettings;
+  /** A shape drawn with the Cut or Add tool. */
+  onShapeOp(op: "cut" | "add", pts: Pt[]): void;
   ref?: Ref<MapHandle>;
 }
 
@@ -95,6 +98,14 @@ const TILES: Record<Exclude<Basemap, "none">, { url: string; attribution: string
 
 const rectPts = (a: Pt, b: Pt): Pt[] => [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }];
 
+const SHAPE_OP_COLOR = { cut: "#ef4444", add: "#22c55e" } as const;
+/** How the current drawing tool behaves: zones (feature) or the Cut / Add shape tools. */
+function drawInfo(tool: Tool, kind: FeatureKind) {
+  if (tool === "cut" || tool === "add") return { closed: true, point: false, color: SHAPE_OP_COLOR[tool] };
+  if (tool === "feature") { const i = FEATURE_INFO[kind]; return { closed: i.closed, point: i.point, color: i.color }; }
+  return null;
+}
+
 const TWO_CLICK: Tool[] = ["gate", "slalom", "wall", "start", "finish", "calibrate", "measure"];
 
 function coneIcon(c: Cone, selected: boolean) {
@@ -107,6 +118,8 @@ function coneIcon(c: Cone, selected: boolean) {
   return L.divIcon({ className: "", iconSize: [12, 12], iconAnchor: [6, 6], html: `<div style="width:12px;height:12px;${ring}border-radius:50%"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 1 L11 11 L1 11 Z" fill="${color}" stroke="#7c2d12" stroke-width="1"/></svg></div>` });
 }
 
+const straightIcon = L.divIcon({ className: "", iconSize: [12, 12], iconAnchor: [6, 6], html: `<div style="width:12px;height:12px;background:#fff;border:2px solid #f97316;border-radius:50%;cursor:pointer"></div>` });
+const straightFirstIcon = L.divIcon({ className: "", iconSize: [16, 16], iconAnchor: [8, 8], html: `<div style="width:16px;height:16px;background:#f97316;border:2px solid #fff;border-radius:50%"></div>` });
 const vertexIcon = L.divIcon({ className: "", iconSize: [10, 10], iconAnchor: [5, 5], html: `<div style="width:10px;height:10px;background:#fff;border:2px solid #2563eb;border-radius:2px"></div>` });
 
 const midIcon = L.divIcon({ className: "", iconSize: [8, 8], iconAnchor: [4, 4], html: `<div style="width:8px;height:8px;background:rgba(255,255,255,.55);border:1px solid #2563eb;border-radius:50%"></div>` });
@@ -129,6 +142,8 @@ export default function MapEditor(props: Props) {
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const mouseRef = useRef<Pt | null>(null);
+  const [straightFrom, setStraightFrom] = useState<number | null>(null);
+  useEffect(() => { setStraightFrom(null); }, [props.tool, props.selection]);
 
   useImperativeHandle(props.ref, () => ({
     flyTo: (ll, zoom = 18) => mapRef.current?.setView([ll.lat, ll.lng], zoom),
@@ -310,15 +325,16 @@ export default function MapEditor(props: Props) {
     if (tool === "pointer") { P.onChange({ ...c, cones: [...c.cones, { id: uid("c"), ...p, kind: "pointer", rot: nearestLineDir(p), group: "free" }] }); return; }
     if (tool === "line") { P.onChange({ ...c, line: [...c.line, p] }); return; }
     if (tool === "image-move" && c.image) { P.onChange({ ...c, image: { ...c.image, x: p.x - c.image.w / 2, y: p.y - c.image.h / 2 } }); P.onToolDone(); return; }
-    if (tool === "feature") {
-      const info = FEATURE_INFO[P.featureKind];
+    const info = drawInfo(tool, P.featureKind);
+    if (info) {
       if (info.point) { P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: [p], closed: false }] }); return; }
       if (P.options.zoneShape === "rect" && info.closed) {
         const pend = pendingRef.current;
         if (!pend.length) { if (c !== P.course) P.onChange(c); setPending([p]); return; }
         setPending([]);
         if (Math.abs(p.x - pend[0].x) < 3 || Math.abs(p.y - pend[0].y) < 3) { P.onStatus("Rectangle too small; click two opposite corners."); return; }
-        P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: rectPts(pend[0], p), closed: true }] });
+        if (tool === "cut" || tool === "add") P.onShapeOp(tool, rectPts(pend[0], p));
+        else P.onChange({ ...c, features: [...c.features, { id: uid("f"), kind: P.featureKind, pts: rectPts(pend[0], p), closed: true }] });
         return;
       }
       if (c !== P.course) P.onChange(c); // origin moved
@@ -372,10 +388,11 @@ export default function MapEditor(props: Props) {
   function finishMulti() {
     const P = latest.current;
     const pend = pendingRef.current;
-    if (P.tool === "feature" && pend.length >= 2) {
-      const info = FEATURE_INFO[P.featureKind];
+    const info = drawInfo(P.tool, P.featureKind);
+    if (info && pend.length >= 2) {
       const closed = info.closed && pend.length >= 3;
       if (info.closed && (!closed || polygonArea(pend) < 10)) { P.onStatus("An area needs at least 3 corners."); return; }
+      if (P.tool === "cut" || P.tool === "add") { setPending([]); P.onShapeOp(P.tool, pend); return; }
       P.onChange({ ...P.course, features: [...P.course.features, { id: uid("f"), kind: P.featureKind, pts: pend, closed }] });
       setPending([]);
     } else if (P.tool === "line") P.onToolDone();
@@ -395,14 +412,15 @@ export default function MapEditor(props: Props) {
       L.polyline([ll(P.course.line[P.course.line.length - 1]), ll(m)], { color: "#38bdf8", dashArray: "4 4", weight: 2, interactive: false }).addTo(tmp);
     }
     if (!pend.length) return;
-    const col = P.tool === "feature" ? FEATURE_INFO[P.featureKind].color : "#38bdf8";
-    if (P.tool === "feature" && P.options.zoneShape === "rect" && FEATURE_INFO[P.featureKind].closed && m) {
+    const di = drawInfo(P.tool, P.featureKind);
+    const col = di ? di.color : "#38bdf8";
+    if (di?.closed && P.options.zoneShape === "rect" && m) {
       const r = rectPts(pend[0], m);
       L.polygon(r.map(ll), { color: col, weight: 2, dashArray: "5 5", fillOpacity: 0.15, interactive: false }).addTo(tmp);
       L.tooltip({ permanent: true, direction: "right", offset: [10, 0], className: "measure-tip" }).setLatLng(ll(m)).setContent(`${Math.abs(m.x - pend[0].x).toFixed(0)} × ${Math.abs(m.y - pend[0].y).toFixed(0)} ft`).addTo(tmp);
       return;
     }
-    if (P.tool === "feature" && FEATURE_INFO[P.featureKind].closed) {
+    if (di?.closed) {
       // Polygon in progress: filled preview with the closing edge, and vertex dots.
       L.polygon(pts.map(ll), { color: col, weight: 2, dashArray: "5 5", fillOpacity: 0.12, interactive: false }).addTo(tmp);
       pend.forEach((q, i) => L.circleMarker(ll(q), { radius: i === 0 ? 7 : 4, color: "#fff", weight: 2, fillColor: col, fillOpacity: 1, interactive: false }).addTo(tmp));
@@ -443,8 +461,28 @@ export default function MapEditor(props: Props) {
       else if (f.closed) shape = L.polygon(f.pts.map(ll), style);
       else shape = L.polyline(f.pts.map(ll), { ...style, weight: sel ? 5 : 4 });
       (shape as L.Path).bindTooltip(f.label || info.label, { sticky: true });
-      shape.on("click", (e) => { if (latest.current.tool === "select") { L.DomEvent.stop(e); latest.current.onSelect({ type: "feature", id: f.id }); } });
+      shape.on("click", (e) => {
+        const t = latest.current.tool;
+        if (t === "select" || (t === "straighten" && f.closed)) { L.DomEvent.stop(e); latest.current.onSelect({ type: "feature", id: f.id }); setStraightFrom(null); }
+      });
       shape.addTo(layer);
+      if (sel && tool === "straighten" && f.closed) {
+        f.pts.forEach((p, i) => {
+          const first = straightFrom === i;
+          const mk = L.marker(ll(p), { icon: first ? straightFirstIcon : straightIcon, title: first ? "Start corner" : "Click to straighten to here" }).addTo(layer);
+          mk.on("click", (e) => {
+            L.DomEvent.stop(e);
+            const P = latest.current;
+            if (straightFrom === null || straightFrom === i) { setStraightFrom(i); P.onStatus("Now click the corner where the straight edge should end."); return; }
+            const ft = P.course.features.find((x) => x.id === f.id);
+            if (!ft) return;
+            const pts = straightenEdge(ft.pts, straightFrom, i);
+            setStraightFrom(null);
+            P.onChange({ ...P.course, features: P.course.features.map((x) => (x.id === f.id ? { ...x, pts } : x)) });
+            P.onStatus(`Straightened: removed ${ft.pts.length - pts.length} corner(s). Click two more corners to straighten another edge.`);
+          });
+        });
+      }
       if (sel && editable) {
         f.pts.forEach((p, i) => {
           const mk = L.marker(ll(p), { icon: vertexIcon, draggable: true }).addTo(layer);
@@ -531,7 +569,7 @@ export default function MapEditor(props: Props) {
       L.circleMarker(ll(iss.at), { radius: 11, color: col, weight: 2, fill: false, dashArray: "3 3", interactive: false }).addTo(layer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.course, props.sim, props.selection, props.tool, props.issues]);
+  }, [props.course, props.sim, props.selection, props.tool, props.issues, straightFrom]);
 
   return <div ref={divRef} className={`map tool-${props.tool}`} />;
 }

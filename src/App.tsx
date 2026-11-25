@@ -9,6 +9,7 @@ import { polygonArea } from "./geo";
 import { checkCourse, type Issue } from "./rules";
 import Run3D from "./Run3D";
 import { simulate } from "./sim";
+import { addArea, cutAway, smoothOutline } from "./shapes";
 
 const AUTOSAVE_KEY = "acd.autosave.v1";
 
@@ -32,6 +33,9 @@ const TOOLS: { id: Tool; label: string; key: string; hint: string }[] = [
   { id: "finish", label: "Finish line", key: "2", hint: "Click both timing lights of the finish." },
   { id: "feature", label: "Zone / site object", key: "A", hint: "Click points around the area, Enter or double-click to close it." },
   { id: "measure", label: "Measure", key: "M", hint: "Click two points to measure distance." },
+  { id: "cut", label: "Cut away", key: "X", hint: "Draw around the part to remove: click corners, then click the first point (or Enter). Cuts the selected zone, or every Course area it touches." },
+  { id: "add", label: "Add area", key: "+", hint: "Draw the extra area: click corners, then click the first point (or Enter). It merges into the selected zone, or into every Course area it touches." },
+  { id: "straighten", label: "Straighten edge", key: "E", hint: "Click a zone, then click the corner where a straight edge should start and the corner where it should end. Everything between becomes one straight line." },
   { id: "wand", label: "Find pavement", key: "F", hint: "Click inside a parking lot or runway to outline it from the aerial photo. Shift-click to add more; adjust Tolerance to grow or shrink. Zoom so the area fills most of the view." },
 ];
 
@@ -60,8 +64,30 @@ export default function App() {
       return c;
     });
   }, []);
-  const undo = () => { if (!past.length) return; setFuture((f) => [course, ...f]); setCourse(past[past.length - 1]); setPast((p) => p.slice(0, -1)); };
-  const redo = () => { if (!future.length) return; setPast((p) => [...p, course]); setCourse(future[0]); setFuture((f) => f.slice(1)); };
+  /** Cut / Add shapes act on the selected zone, or on every Course area they touch. */
+  function onShapeOp(op: "cut" | "add", pts: Pt[]) {
+    const sel = selection?.type === "feature" ? course.features.find((f) => f.id === selection.id && f.closed) : undefined;
+    const targets = sel ? [sel.id] : null;
+    const kind = sel?.kind ?? "paved";
+    if (op === "cut") {
+      const r = cutAway(course.features, pts, targets, kind);
+      if (!r.changed) { setStatus(sel ? "That shape doesn't overlap the selected zone." : "That shape doesn't overlap any Course area. Select a zone first to cut a different kind."); return; }
+      change({ ...course, features: r.features });
+      if (sel && !r.features.some((f) => f.id === sel.id)) setSelection(null);
+      setStatus(`Cut away from ${r.changed} zone(s). Draw again to cut more, or press Esc.`);
+    } else {
+      const r = addArea(course.features, pts, targets, kind);
+      change({ ...course, features: r.features });
+      if (r.created) setSelection({ type: "feature", id: r.created });
+      setStatus(r.changed ? `Added to ${r.changed} zone(s).` : "Didn't touch a Course area, so it was added as a new one.");
+    }
+  }
+
+  // Smoothing slider: always simplify from the outline as it was when the zone was selected.
+  const [smooth, setSmooth] = useState<{ id: string; base: Pt[]; tol: number } | null>(null);
+
+  const undo = () => { if (!past.length) return; setSmooth(null); setFuture((f) => [course, ...f]); setCourse(past[past.length - 1]); setPast((p) => p.slice(0, -1)); };
+  const redo = () => { if (!future.length) return; setSmooth(null); setPast((p) => [...p, course]); setCourse(future[0]); setFuture((f) => f.slice(1)); };
 
   useEffect(() => {
     const t = setTimeout(() => { try { localStorage.setItem(AUTOSAVE_KEY, serialize(course)); } catch { /* image too big for autosave */ } }, 500);
@@ -211,6 +237,11 @@ export default function App() {
           <button className={`wand ${tool === "wand" ? "on" : ""}`} onClick={() => setTool("wand")} title={TOOLS.find((t) => t.id === "wand")!.hint}>
             <span>✦ Find pavement</span><kbd>F</kbd>
           </button>
+          <div className="seg-row edit-row">
+            {TOOLS.filter((t) => t.id === "cut" || t.id === "add" || t.id === "straighten").map((t) => (
+              <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>{t.id === "cut" ? "✂ Cut" : t.id === "add" ? "+ Add" : "⟋ Edge"}</button>
+            ))}
+          </div>
           {tool === "wand" && (
             <div className="wand-opts">
               <label>Tolerance <input type="range" min={4} max={40} step={1} value={wand.tolerance} onChange={(e) => setWand({ ...wand, tolerance: +e.target.value })} /> <span>{wand.tolerance}</span></label>
@@ -285,6 +316,7 @@ export default function App() {
             onToolDone={() => setTool("select")}
             onStatus={setStatus}
             onCalibrate={(a, b) => setCalib({ a, b })}
+            onShapeOp={onShapeOp}
             wand={wand}
           />
           <div className="hint">{toolHint}{status && <span className="status"> · {status}</span>}</div>
@@ -325,7 +357,28 @@ export default function App() {
                     </select>
                   </label>
                   <label>Label <input value={selFeat.label ?? ""} onChange={(e) => setCourse({ ...course, features: course.features.map((f) => (f.id === selFeat.id ? { ...f, label: e.target.value } : f)) })} /></label>
-                  <div className="small">{FEATURE_INFO[selFeat.kind].help} Drag the white handles to reshape; right-click a handle to remove it.</div>
+                  <div className="small">{FEATURE_INFO[selFeat.kind].help} Drag the white handles to reshape, drag a small midpoint dot to add a corner, right-click a handle to remove it.</div>
+                  {selFeat.closed && (
+                    <>
+                      <div className="seg-row">
+                        <button className={tool === "cut" ? "on" : ""} onClick={() => setTool("cut")} title={TOOLS.find((t) => t.id === "cut")!.hint}>✂ Cut away</button>
+                        <button className={tool === "add" ? "on" : ""} onClick={() => setTool("add")} title={TOOLS.find((t) => t.id === "add")!.hint}>+ Add area</button>
+                        <button className={tool === "straighten" ? "on" : ""} onClick={() => setTool("straighten")} title={TOOLS.find((t) => t.id === "straighten")!.hint}>⟋ Straighten</button>
+                      </div>
+                      <label title="Removes small wiggles: corners closer than this to a straight line are dropped.">Smooth edges
+                        <input type="range" min={0} max={40} step={1}
+                          value={smooth?.id === selFeat.id ? smooth.tol : 0}
+                          onPointerDown={() => { if (smooth?.id !== selFeat.id) { setSmooth({ id: selFeat.id, base: selFeat.pts, tol: 0 }); } change(course); }}
+                          onChange={(e) => {
+                            const tol = +e.target.value;
+                            const base = smooth?.id === selFeat.id ? smooth.base : selFeat.pts;
+                            setSmooth({ id: selFeat.id, base, tol });
+                            setCourse({ ...course, features: course.features.map((f) => (f.id === selFeat.id ? { ...f, pts: smoothOutline(base, tol) } : f)) });
+                          }} />
+                        <span className="small">{selFeat.pts.length} corners</span>
+                      </label>
+                    </>
+                  )}
                   <button onClick={() => { change({ ...course, features: course.features.filter((f) => f.id !== selFeat.id) }); setSelection(null); }}>Delete</button>
                 </div>
               )}
