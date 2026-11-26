@@ -10,8 +10,11 @@ import {
   perp,
   pointInPolygon,
   polygonArea,
+  resample,
   scale,
+  signedRadius,
   simplify,
+  smoothPath,
   sub,
   type Pt,
 } from "./geo";
@@ -436,4 +439,78 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
   }
 
   return { line: simplify(line, 0.4), cones };
+}
+
+export interface LineConesOptions {
+  /** Put a slalom on straights of 250 ft or more (the line then weaves through it). */
+  slaloms: boolean;
+  slalomSpacing?: number;
+  seed?: number;
+}
+
+/**
+ * Places gates, apex pointers, slaloms and the finish chute along the driving line the user
+ * drew. The line is kept as drawn unless slaloms are added (then it weaves through them).
+ */
+export function conesForLine(course: Course, opt: LineConesOptions): { line: Pt[]; cones: Cone[]; counts: Record<string, number> } | null {
+  if (course.line.length < 2) return null;
+  const pts = resample(smoothPath(course.line, STEP), STEP);
+  if (pts.length < 20) return null;
+  const n = pts.length;
+  const K = 8; // curvature baseline: ±16 ft
+  const R = pts.map((_, i) => (i < K || i >= n - K ? Infinity : signedRadius(pts[i - K], pts[i], pts[i + K])));
+  const heading = (i: number) => Math.atan2(pts[Math.min(n - 1, i + 1)].y - pts[Math.max(0, i - 1)].y, pts[Math.min(n - 1, i + 1)].x - pts[Math.max(0, i - 1)].x);
+
+  // Runs of curve (same direction, radius under 300 ft) and straight.
+  type Run = { a: number; b: number; side: number };
+  const runs: Run[] = [];
+  for (let i = 0; i < n; i++) {
+    const side = Math.abs(R[i]) < 300 ? Math.sign(R[i]) : 0;
+    const last = runs[runs.length - 1];
+    if (last && last.side === side) last.b = i;
+    else runs.push({ a: i, b: i, side });
+  }
+  // Fold slivers (under 16 ft) into the run before them.
+  for (let k = runs.length - 1; k > 0; k--) {
+    if (runs[k].b - runs[k].a + 1 < 8) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
+  }
+  for (let k = runs.length - 1; k > 0; k--) {
+    if (runs[k].side === runs[k - 1].side) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
+  }
+
+  const spacing = opt.slalomSpacing ?? 66;
+  const launchEnd = Math.ceil(60 / STEP);
+  const finishStart = n - Math.ceil(FIN_STRAIGHT / STEP);
+  const nodes: Node[] = [];
+  const counts: Record<string, number> = {};
+  runs.forEach((run, segId) => {
+    let seg: Seg;
+    let radius = Infinity;
+    if (run.side !== 0) {
+      let ang = 0;
+      let minR = Infinity;
+      for (let i = run.a + 1; i <= run.b; i++) {
+        let d = heading(i) - heading(i - 1);
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        ang += Math.abs(d);
+        minR = Math.min(minR, Math.abs(R[i]));
+      }
+      radius = minR;
+      seg = ang < 0.35 ? "kink" : minR >= 70 ? "sweeper" : ang > 2.4 ? "hairpin" : "turn";
+    } else {
+      const len = (run.b - run.a) * STEP;
+      seg = opt.slaloms && len >= 250 ? "slalom" : "straight";
+      if (seg === "slalom") radius = spacing;
+    }
+    counts[seg] = (counts[seg] ?? 0) + 1;
+    for (let i = run.a; i <= run.b; i++) {
+      const s = i < launchEnd ? "launch" : i >= finishStart ? "finish" : seg;
+      nodes.push({ p: pts[i], seg: s, segId: s === seg ? segId : s === "launch" ? -1 : -2, side: run.side, R: radius });
+    }
+  });
+
+  const finDir = heading(n - 2);
+  const finishP = course.finish ? lerp(course.finish.a, course.finish.b, 0.5) : pts[n - 1];
+  const placed = placeCones(nodes, finDir, finishP, mulberry32(opt.seed ?? 1));
+  return { line: counts.slalom ? placed.line : course.line, cones: placed.cones, counts };
 }

@@ -41,3 +41,17 @@ if (r.start !== c.start || r.finish !== c.finish) { console.error("generator mov
 // No start/finish: refuses with a reason.
 const none = newCourse(); none.features = c.features; const st = { noStart: 0, noFinish: 0, lengths: [] as number[] } as import("../src/generate").GenStats;
 if (generateCourse(none, { seed: 1, attempts: 5, technical: 0.4, stats: st }) || st.reason !== "gates") { console.error("should require start and finish"); process.exit(1); }
+
+// Cones along a drawn line: straight, left 90, long straight, right sweeper, finish.
+import { conesForLine } from "../src/generate";
+const lc = newCourse();
+lc.features = c.features;
+lc.line = [{ x: -500, y: -250 }, { x: -200, y: -250 }, { x: -150, y: -200 }, { x: -150, y: 150 }, { x: -50, y: 230 }, { x: 150, y: 250 }, { x: 400, y: 250 }];
+lc.finish = { a: { x: 300, y: 232 }, b: { x: 300, y: 268 } };
+const lr = conesForLine(lc, { slaloms: false });
+if (!lr || lr.line !== lc.line) { console.error("conesForLine should keep the drawn line"); process.exit(1); }
+const pointers = lr.cones.filter((k) => k.kind === "pointer");
+console.log("line cones:", lr.counts, "cones", lr.cones.length, "pointers", pointers.length);
+if (pointers.length < 2) { console.error("expected apex pointers in both turns"); process.exit(1); }
+const ls = conesForLine(lc, { slaloms: true })!;
+if (!ls.counts.slalom || ls.line === lc.line) { console.error("slalom option should add a slalom and weave the line"); process.exit(1); }

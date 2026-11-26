@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { dist, type Pt } from "./geo";
-import { generateCourse, type GenResult, type GenStats } from "./generate";
+import { conesForLine, generateCourse, type GenResult, type GenStats } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
-import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Course, type FeatureKind } from "./model";
+import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Cone, type Course, type FeatureKind } from "./model";
 import { polygonArea } from "./geo";
 import { checkCourse, type Issue } from "./rules";
 import Run3D from "./Run3D";
@@ -44,6 +44,14 @@ export default function App() {
   const [past, setPast] = useState<Course[]>([]);
   const [future, setFuture] = useState<Course[]>([]);
   const [tool, setTool] = useState<Tool>("select");
+  const [mode, setModeRaw] = useState<"site" | "course">(() => (localStorage.getItem("acd.mode") === "site" ? "site" : "course"));
+  const setMode = (m: "site" | "course") => { setModeRaw(m); localStorage.setItem("acd.mode", m); };
+  // Picking a tool switches to the mode it belongs to.
+  useEffect(() => {
+    if (SITE_TOOLS.includes(tool) && mode !== "site") setMode("site");
+    if (COURSE_TOOLS.includes(tool) && mode !== "course") setMode("course");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
   const [featureKind, setFeatureKind] = useState<FeatureKind>("paved");
   const [selection, setSelection] = useState<Selection>(null);
   const [options, setOptions] = useState<ToolOptions>({ gateWidth: 22, slalomSpacing: 66, wallSpacing: 6, zoneShape: "polygon" });
@@ -239,13 +247,19 @@ export default function App() {
 
       <div className="body">
         <aside className="tools">
+          <div className="mode-switch">
+            <button className={mode === "site" ? "on" : ""} onClick={() => { setMode("site"); setTool("select"); setSelection(null); }} title="Map the site: course area, paddock, don't-use zones, obstacles">🗺 Site map</button>
+            <button className={mode === "course" ? "on" : ""} onClick={() => { setMode("course"); setTool("select"); setSelection(null); }} title="Design the course: timing, path and cones. Zones can't be clicked here.">🏁 Course</button>
+          </div>
           <div className="seg-row">
             {TOOLS.filter((t) => t.id === "select" || t.id === "measure").map((t) => (
               <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>{t.id === "select" ? "Select" : "Measure"} <kbd>{t.key}</kbd></button>
             ))}
           </div>
 
-          <div className="section-title"><b>1</b> Site zones</div>
+          {mode === "site" ? (
+            <>
+          <div className="section-title">Zones</div>
           <button className={`wand ${tool === "wand" ? "on" : ""}`} onClick={() => setTool("wand")} title={TOOLS.find((t) => t.id === "wand")!.hint}>
             <span>✦ Find pavement</span><kbd>F</kbd>
           </button>
@@ -286,20 +300,6 @@ export default function App() {
             </button>
           ))}
 
-          {([["2", "Timing", ["start", "finish"]], ["3", "Course", ["cone", "pointer", "gate", "slalom", "wall", "line"]]] as const).map(([n, title, ids]) => (
-            <div key={n} className="tool-group">
-              <div className="section-title"><b>{n}</b> {title}</div>
-              {ids.map((id) => TOOLS.find((t) => t.id === id)!).map((t) => (
-                <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
-                  <span>{t.label}</span><kbd>{t.key}</kbd>
-                </button>
-              ))}
-            </div>
-          ))}
-          <div className="opts">
-            <label>Slalom spacing <input type="number" min={30} max={120} value={options.slalomSpacing} onChange={(e) => setOptions({ ...options, slalomSpacing: +e.target.value || 66 })} /> ft</label>
-            <label>Wall spacing <input type="number" min={2} max={30} value={options.wallSpacing} onChange={(e) => setOptions({ ...options, wallSpacing: +e.target.value || 6 })} /> ft</label>
-          </div>
           {course.image && (
             <div className="opts">
               <b>Image overlay</b>
@@ -309,6 +309,34 @@ export default function App() {
               <button onClick={() => setTool("image-move")}>Move image…</button>
               <button onClick={() => change({ ...course, image: null })}>Remove image</button>
             </div>
+          )}
+            </>
+          ) : (
+            <>
+          <div className="section-title"><b>1</b> Timing</div>
+          {(["start", "finish"] as const).map((id) => TOOLS.find((t) => t.id === id)!).map((t) => (
+            <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
+              <span>{t.label}{course[t.id as "start" | "finish"] ? " ✓" : ""}</span><kbd>{t.key}</kbd>
+            </button>
+          ))}
+          <div className="section-title"><b>2</b> Your path</div>
+          {[TOOLS.find((t) => t.id === "line")!].map((t) => (
+            <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
+              <span>{t.label}{course.line.length > 1 ? " ✓" : ""}</span><kbd>{t.key}</kbd>
+            </button>
+          ))}
+          <div className="section-title"><b>3</b> Cones</div>
+          <button className="primary" onClick={() => setGenOpen(true)}>Auto-generate cones</button>
+          {(["cone", "pointer", "gate", "slalom", "wall"] as const).map((id) => TOOLS.find((t) => t.id === id)!).map((t) => (
+            <button key={t.id} className={tool === t.id ? "on" : ""} onClick={() => setTool(t.id)} title={`${t.hint} (${t.key})`}>
+              <span>{t.label}</span><kbd>{t.key}</kbd>
+            </button>
+          ))}
+          <div className="opts">
+            <label>Slalom spacing <input type="number" min={30} max={120} value={options.slalomSpacing} onChange={(e) => setOptions({ ...options, slalomSpacing: +e.target.value || 66 })} /> ft</label>
+            <label>Wall spacing <input type="number" min={2} max={30} value={options.wallSpacing} onChange={(e) => setOptions({ ...options, wallSpacing: +e.target.value || 6 })} /> ft</label>
+          </div>
+            </>
           )}
         </aside>
 
@@ -329,6 +357,7 @@ export default function App() {
             onStatus={setStatus}
             onCalibrate={(a, b) => setCalib({ a, b })}
             onShapeOp={onShapeOp}
+            mode={mode}
             wand={wand}
           />
           <div className="hint">{toolHint}{status && <span className="status"> · {status}</span>}</div>
@@ -420,7 +449,7 @@ export default function App() {
                   const sqft = polygonArea(f.pts);
                   const sel = selection?.type === "feature" && selection.id === f.id;
                   return (
-                    <li key={f.id} className={sel ? "on" : ""} onClick={() => { setTool("select"); setSelection({ type: "feature", id: f.id }); mapRef.current?.focus({ x: f.pts.reduce((a, p) => a + p.x, 0) / f.pts.length, y: f.pts.reduce((a, p) => a + p.y, 0) / f.pts.length }); }}>
+                    <li key={f.id} className={sel ? "on" : ""} onClick={() => { setMode("site"); setTool("select"); setSelection({ type: "feature", id: f.id }); mapRef.current?.focus({ x: f.pts.reduce((a, p) => a + p.x, 0) / f.pts.length, y: f.pts.reduce((a, p) => a + p.y, 0) / f.pts.length }); }}>
                       <i style={{ background: FEATURE_INFO[f.kind].color }} />
                       <span>{f.label || FEATURE_INFO[f.kind].label}</span>
                       <button className="lock" title={f.locked ? "Locked: click to unlock" : "Lock this zone"} onClick={(e) => { e.stopPropagation(); setLocked([f.id], !f.locked); }}>{f.locked ? "🔒" : "🔓"}</button>
@@ -461,16 +490,29 @@ export default function App() {
       </div>
 
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
-      {genOpen && <GenerateDialog course={course} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
+      {genOpen && <GenerateDialog course={course} slalomSpacing={options.slalomSpacing} onCones={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Placed ${r.cones.length} cones along your line. Drag any cone to adjust; Undo to take them back.`); }} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
       {help && <HelpDialog onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
   );
 }
 
-function GenerateDialog({ course, onClose, onApply, onPickTool }: { course: Course; onClose(): void; onApply(r: GenResult): void; onPickTool(t: Tool): void }) {
+const SITE_TOOLS: Tool[] = ["feature", "wand", "cut", "add", "straighten", "calibrate", "image-move"];
+const COURSE_TOOLS: Tool[] = ["start", "finish", "cone", "pointer", "gate", "slalom", "wall", "line"];
+
+function GenerateDialog({ course, onClose, onApply, onPickTool, onCones, slalomSpacing }: { course: Course; onClose(): void; onApply(r: GenResult): void; onPickTool(t: Tool): void; onCones(r: { line: Pt[]; cones: Cone[] }): void; slalomSpacing: number }) {
   const [technical, setTechnical] = useState(0.4);
   const [cross, setCross] = useState<boolean | null>(null);
+  const hasLine = course.line.length > 1;
+  const [designPath, setDesignPath] = useState(false);
+  const [slaloms, setSlaloms] = useState(false);
+  const placeCones = () => {
+    const r = conesForLine(course, { slaloms, slalomSpacing, seed: Math.floor(Math.random() * 1e9) });
+    if (!r) { setMsg("ERROR:The driving line is too short to place cones along."); return; }
+    const n = course.cones.filter((k) => k.group !== "start" && k.group !== "finish").length;
+    if (n && !confirm(`Replace the current ${n} cones with cones along your line? Your start and finish stay. (Undo is available.)`)) return;
+    onCones(r);
+  };
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const hasPaved = course.features.some((f) => f.kind === "paved" && f.pts.length >= 3);
@@ -505,16 +547,32 @@ function GenerateDialog({ course, onClose, onApply, onPickTool }: { course: Cour
           <p>First outline the usable pavement with <b>1 Site zones → Course area</b> (or ✦ Find pavement), and mark Don't-use, obstacle, spectator, paddock and grid areas.</p>
         ) : !ready ? (
           <>
-            <p>Place your timing lines first. The course is built from your start to your finish.</p>
+            <p>Place your timing lines first. The course runs from your start to your finish.</p>
             <ul className="gen-steps">
               <li className={course.start ? "done" : ""}>{course.start ? "✓ Start line placed" : <button onClick={() => onPickTool("start")}>Place start line</button>}</li>
               <li className={course.finish ? "done" : ""}>{course.finish ? "✓ Finish line placed" : <button onClick={() => onPickTool("finish")}>Place finish line</button>}</li>
             </ul>
             <p className="small">Click both timing lights for each line. Leave about 120 ft of room after the start, and 70 ft of approach plus about 200 ft of runout around the finish.</p>
           </>
+        ) : !designPath ? (
+          <>
+            <ul className="gen-steps">
+              <li className="done">✓ Start and finish placed</li>
+              <li className={hasLine ? "done" : ""}>{hasLine ? "✓ Driving line drawn" : <button onClick={() => onPickTool("line")}>Draw your driving line</button>}</li>
+            </ul>
+            {hasLine ? (
+              <>
+                <p className="small">Places gates and apex pointers in each turn, gates on long sweepers, and the finish chute, along the line you drew. Your line stays as drawn.</p>
+                <label className="chk"><input type="checkbox" checked={slaloms} onChange={(e) => setSlaloms(e.target.checked)} /> Add a slalom on straights of 250 ft or more ({slalomSpacing} ft spacing; the line will weave through it)</label>
+              </>
+            ) : (
+              <p className="small">Click from the start line along the path you want, and click near the finish line to end there. Then come back here to place the cones.</p>
+            )}
+            <p className="small"><a href="#" onClick={(e) => { e.preventDefault(); setDesignPath(true); }}>Or let it design the path too…</a></p>
+          </>
         ) : (
           <>
-            <p className="small">Builds sweepers, 90s, slaloms and offsets from your start line to your finish line, keeping the Course area margins, then simulates and rule-checks the candidates and keeps the best. Treat it as a starting point.</p>
+            <p className="small">Designs a path from your start line to your finish line (sweepers, 90s, slaloms and offsets), keeping the Course area margins, then simulates and rule-checks the candidates and keeps the best. This replaces your driving line.</p>
             <div className="gen-q">
               <div>Allow crossovers?</div>
               <div className="seg-row">
@@ -524,12 +582,15 @@ function GenerateDialog({ course, onClose, onApply, onPickTool }: { course: Cour
               <div className="small">Crossovers let the course cross itself at a steep angle (up to twice). Only for running one car on course at a time.</div>
             </div>
             <label className="row">Style: open <input type="range" min={0} max={1} step={0.1} value={technical} onChange={(e) => setTechnical(+e.target.value)} /> technical</label>
+            <p className="small"><a href="#" onClick={(e) => { e.preventDefault(); setDesignPath(false); }}>← Back to cones for my own line</a></p>
           </>
         )}
         {msg && (msg.startsWith("ERROR:") ? <p className="gen-error">{msg.slice(6)}</p> : <p className="small">{msg}</p>)}
         <div className="actions">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!ready || cross === null || busy} onClick={run} title={ready && cross === null ? "Answer the crossover question first" : ""}>{busy ? "Working…" : "Generate"}</button>
+          {ready && !designPath
+            ? <button className="primary" disabled={!hasLine} onClick={placeCones}>Place cones</button>
+            : <button className="primary" disabled={!ready || cross === null || busy} onClick={run} title={ready && cross === null ? "Answer the crossover question first" : ""}>{busy ? "Working…" : "Design path and cones"}</button>}
         </div>
       </div>
     </div>
@@ -558,7 +619,7 @@ function HelpDialog({ onClose }: { onClose(): void }) {
         <ol>
           <li><b>Find the site.</b> Search an address or "lat, lng", or import a Google Earth Pro screenshot (<i>Import image</i>, then set its scale) or KML of placemarks you traced in Google Earth.</li>
           <li><b>Define zones.</b> The fastest way is <b>Find pavement</b>: click inside a lot or runway and the app outlines it from the aerial photo (Shift-click to add more, adjust Tolerance to grow or shrink). Or draw zones by hand under <i>Site zones</i>: draw the <b>Course area</b> (where the course may go), the <b>Paddock</b>, and any <b>Don't use</b> areas, plus grid and spectator areas. Draw rectangles with two corner clicks, or switch to Polygon for odd shapes. Then mark light poles, curbs, buildings/fences and surface hazards under <i>Site objects</i>.</li>
-          <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or place the start and finish lines and click <i>Auto-generate</i>: it builds the course between them, and asks whether crossovers are allowed. <i>Clear course</i> removes cones, line and timing lines but keeps your zones. Use the 🔒 in the Zones list (or <i>Lock all</i>) so finished zones can't be changed by accident.</li>
+          <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or switch to <b>🏁 Course</b>, place the start and finish lines, draw your path with <i>Driving line</i>, and click <i>Auto-generate cones</i> to place gates, pointers and the finish chute along it (it can also design the path for you). <i>Clear course</i> removes cones, line and timing lines but keeps your zones. Use the 🔒 in the Zones list (or <i>Lock all</i>) so finished zones can't be changed by accident.</li>
           <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (mid‑60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
           <li><b>Drive it.</b> <i>3D run-through</i> drives the simulated line in driver, chase or free-orbit view.</li>
           <li><b>Share.</b> Save the .axcourse project, export KML to view it in Google Earth, or export a printable SVG course map.</li>

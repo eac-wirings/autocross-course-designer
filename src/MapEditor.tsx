@@ -42,6 +42,8 @@ interface Props {
   onStatus(s: string): void;
   onCalibrate(a: Pt, b: Pt): void;
   wand: WandSettings;
+  /** Site map: zones are clickable, cones are not. Course design: the reverse. */
+  mode: "site" | "course";
   /** A shape drawn with the Cut or Add tool. */
   onShapeOp(op: "cut" | "add", pts: Pt[]): void;
   ref?: Ref<MapHandle>;
@@ -326,7 +328,20 @@ export default function MapEditor(props: Props) {
     if (tool === "select") { P.onSelect(null); return; }
     if (tool === "cone") { P.onChange({ ...c, cones: [...c.cones, { id: uid("c"), ...p, kind: "standing", group: "free" }] }); return; }
     if (tool === "pointer") { P.onChange({ ...c, cones: [...c.cones, { id: uid("c"), ...p, kind: "pointer", rot: nearestLineDir(p), group: "free" }] }); return; }
-    if (tool === "line") { P.onChange({ ...c, line: [...c.line, p] }); return; }
+    if (tool === "line") {
+      const startMid = c.start ? { x: (c.start.a.x + c.start.b.x) / 2, y: (c.start.a.y + c.start.b.y) / 2 } : null;
+      const finMid = c.finish ? { x: (c.finish.a.x + c.finish.b.x) / 2, y: (c.finish.a.y + c.finish.b.y) / 2 } : null;
+      if (finMid && c.line.length && dist(p, finMid) < 40) {
+        P.onChange({ ...c, line: [...c.line, finMid] });
+        P.onStatus("Driving line ends at the finish. Click Auto-generate to place cones along it.");
+        P.onToolDone();
+        return;
+      }
+      const line = !c.line.length && startMid && dist(p, startMid) > 5 ? [startMid, p] : [...c.line, p];
+      P.onChange({ ...c, line });
+      if (!c.line.length) P.onStatus(finMid ? "Keep clicking along your path. Click near the finish line to end there." : "Keep clicking along your path. Enter or double-click to stop.");
+      return;
+    }
     if (tool === "image-move" && c.image) { P.onChange({ ...c, image: { ...c.image, x: p.x - c.image.w / 2, y: p.y - c.image.h / 2 } }); P.onToolDone(); return; }
     const info = drawInfo(tool, P.featureKind);
     if (info) {
@@ -445,7 +460,8 @@ export default function MapEditor(props: Props) {
   useEffect(() => {
     const layer = layerRef.current!;
     layer.clearLayers();
-    const { course: c, sim, selection, tool, issues } = props;
+    const { course: c, sim, selection, tool, issues, mode } = props;
+    const siteMode = mode === "site";
     const o = c.origin;
     const ll = (p: Pt) => { const q = toLatLng(p, o); return L.latLng(q.lat, q.lng); };
     const editable = tool === "select";
@@ -458,12 +474,12 @@ export default function MapEditor(props: Props) {
     for (const f of c.features) {
       const info = FEATURE_INFO[f.kind];
       const sel = selection?.type === "feature" && selection.id === f.id;
-      const style = { color: info.color, weight: sel ? 3 : 2, fillOpacity: f.kind === "paved" ? 0.1 : f.kind === "nogo" ? 0.35 : 0.28, dashArray: f.kind === "paved" ? "6 4" : f.kind === "nogo" ? "2 4" : undefined };
+      const style = { interactive: siteMode, color: info.color, weight: sel ? 3 : 2, fillOpacity: f.kind === "paved" ? 0.1 : f.kind === "nogo" ? 0.35 : 0.28, dashArray: f.kind === "paved" ? "6 4" : f.kind === "nogo" ? "2 4" : undefined };
       let shape: L.Layer;
-      if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
+      if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { interactive: siteMode, radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
       else if (f.closed) shape = L.polygon(f.pts.map(ll), style);
       else shape = L.polyline(f.pts.map(ll), { ...style, weight: sel ? 5 : 4 });
-      (shape as L.Path).bindTooltip((f.locked ? "🔒 " : "") + (f.label || info.label), { sticky: true });
+      if (siteMode) (shape as L.Path).bindTooltip((f.locked ? "🔒 " : "") + (f.label || info.label), { sticky: true });
       shape.on("click", (e) => {
         const t = latest.current.tool;
         if (t === "select" || (t === "straighten" && f.closed)) { L.DomEvent.stop(e); latest.current.onSelect({ type: "feature", id: f.id }); setStraightFrom(null); }
@@ -536,7 +552,7 @@ export default function MapEditor(props: Props) {
       }
     } else if (c.line.length === 1) L.circleMarker(ll(c.line[0]), { radius: 4, color: "#38bdf8" }).addTo(layer);
 
-    if ((selection?.type === "line" && editable) || tool === "line") {
+    if (!siteMode && ((selection?.type === "line" && editable) || tool === "line")) {
       c.line.forEach((p, i) => {
         const mk = L.marker(ll(p), { icon: vertexIcon, draggable: true, title: "Drag to move · right-click to delete" }).addTo(layer);
         mk.on("dragend", () => {
@@ -556,12 +572,19 @@ export default function MapEditor(props: Props) {
 
     for (const k of c.cones) {
       const sel = selection?.type === "cone" && selection.id === k.id;
-      const mk = L.marker(ll(k), { icon: coneIcon(k, sel), draggable: editable, keyboard: false });
+      const mk = L.marker(ll(k), { icon: coneIcon(k, sel), draggable: editable && !siteMode, interactive: !siteMode, keyboard: false, opacity: siteMode ? 0.55 : 1 });
       mk.on("click", (e) => { if (latest.current.tool === "select") { L.DomEvent.stop(e); latest.current.onSelect({ type: "cone", id: k.id }); } });
       mk.on("dragend", () => {
         const q = toLocal({ lat: mk.getLatLng().lat, lng: mk.getLatLng().lng }, o);
         const P = latest.current;
-        P.onChange({ ...P.course, cones: P.course.cones.map((x) => (x.id === k.id ? { ...x, ...q } : x)) });
+        const cones = P.course.cones.map((x) => (x.id === k.id ? { ...x, ...q } : x));
+        let next = { ...P.course, cones };
+        // Moving a timing light moves its start or finish line with it.
+        if ((k.group === "start" || k.group === "finish") && P.course[k.group]) {
+          const pair = cones.filter((x) => x.group === k.group && (!k.groupId || x.groupId === k.groupId));
+          if (pair.length === 2) next = { ...next, [k.group]: { a: { x: pair[0].x, y: pair[0].y }, b: { x: pair[1].x, y: pair[1].y } } };
+        }
+        P.onChange(next);
       });
       mk.addTo(layer);
     }
