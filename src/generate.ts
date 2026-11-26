@@ -19,7 +19,7 @@ import {
   type Pt,
 } from "./geo";
 import { uid, type Cone, type Course, type FeatureKind } from "./model";
-import { checkCourse } from "./rules";
+import { checkCourse, finishRunout } from "./rules";
 import { simulate } from "./sim";
 
 export interface GenStats {
@@ -58,7 +58,7 @@ export interface GenResult {
   crossovers: number;
 }
 
-type Seg = "launch" | "straight" | "sweeper" | "turn" | "hairpin" | "slalom" | "kink" | "finish";
+type Seg = "launch" | "straight" | "sweeper" | "turn" | "hairpin" | "slalom" | "offset" | "kink" | "finish";
 interface Node { p: Pt; seg: Seg; segId: number; side: number; R: number }
 interface Piece { seg: Seg; side: number; R: number; weave?: number; pts: Pt[]; dir: number }
 
@@ -340,34 +340,47 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
     sid++;
     for (const p of straightFrom(approach, finDir, FIN_STRAIGHT)) kept.push({ p, seg: "finish", segId: sid, side: 0, R: Infinity });
 
-    const placed = placeCones(kept, finDir, finishP, rnd);
+    const placed = placeCones(kept, finDir, finishP, rnd, { slowAt: 150 });
+    placed.cones = fitCones(placed.cones, course).cones;
     return { ...placed, start: course.start!, finish: course.finish!, crossovers: cut.crossings + (cut.cross !== undefined ? 1 : 0) };
   }
 }
 
-function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => number) {
+interface PlaceOptions {
+  /** Entry and exit gates on turns, not just the apex. */
+  detail?: boolean;
+  /** Distance past the finish for the slow-down gate; omitted = none. */
+  slowAt?: number;
+}
+
+function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => number, po: PlaceOptions = {}) {
   const cones: Cone[] = [];
   const line: Pt[] = [];
   const range = (a: number, b: number) => a + rnd() * (b - a);
 
-  // Driving line with weave through slaloms.
+  // Driving line: weaves through slaloms (±7 ft past the cones) and offset gates (±12 ft).
   const segStart = new Map<number, number>();
   nodes.forEach((n, i) => { if (!segStart.has(n.segId)) segStart.set(n.segId, i); });
-  for (let i = 0; i < nodes.length; i++) {
+  const segLenCache = new Map<number, number>();
+  const segLen = (id: number) => { if (!segLenCache.has(id)) segLenCache.set(id, nodes.filter((n) => n.segId === id).length * STEP); return segLenCache.get(id)!; };
+  const leftAt = (i: number) => {
+    const prev = nodes[Math.max(0, i - 1)].p;
+    const next = nodes[Math.min(nodes.length - 1, i + 1)].p;
+    const d = { x: next.x - prev.x, y: next.y - prev.y };
+    const l = Math.hypot(d.x, d.y) || 1;
+    return perp({ x: d.x / l, y: d.y / l });
+  };
+  const weave = (i: number) => {
     const n = nodes[i];
-    if (n.seg === "slalom") {
-      const i0 = segStart.get(n.segId)!;
-      const s = (i - i0 + 1) * STEP;
-      const spacing = n.R;
-      const prev = nodes[Math.max(0, i - 1)].p;
-      const next = nodes[Math.min(nodes.length - 1, i + 1)].p;
-      const d = { x: next.x - prev.x, y: next.y - prev.y };
-      const l = Math.hypot(d.x, d.y) || 1;
-      const off = 7 * Math.sin((Math.PI * s) / spacing - Math.PI / 2) * Math.min(1, s / spacing, ((segLen(n.segId) - s) / spacing) + 0.5);
-      line.push(add(n.p, scale(perp({ x: d.x / l, y: d.y / l }), off)));
-    } else line.push(n.p);
+    if (n.seg !== "slalom" && n.seg !== "offset") return 0;
+    const s = (i - segStart.get(n.segId)! + 1) * STEP;
+    const amp = n.seg === "slalom" ? 7 : 12;
+    return amp * Math.sin((Math.PI * s) / n.R - Math.PI / 2) * Math.min(1, s / n.R, (segLen(n.segId) - s) / n.R + 0.5);
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    const w = weave(i);
+    line.push(w ? add(nodes[i].p, scale(leftAt(i), w)) : nodes[i].p);
   }
-  function segLen(id: number) { return nodes.filter((n) => n.segId === id).length * STEP; }
 
   const gid = () => uid("g");
   const dirAt = (i: number) => {
@@ -375,15 +388,14 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
     const b = nodes[Math.min(nodes.length - 1, i + 2)].p;
     return Math.atan2(b.y - a.y, b.x - a.x);
   };
-  const gate = (i: number, width: number, inside?: number, pointer = false) => {
-    const d = fromAngle(dirAt(i));
-    const left = perp(d);
+  const gate = (i: number, width: number, inside?: number, pointer = false, center?: Pt, group: "gate" | "offset" = "gate") => {
+    const left = perp(fromAngle(dirAt(i)));
     const g = gid();
-    const p = nodes[i].p;
+    const p = center ?? nodes[i].p;
     const a = add(p, scale(left, width / 2));
     const b = add(p, scale(left, -width / 2));
-    cones.push({ id: uid("c"), ...a, kind: "standing", group: "gate", groupId: g });
-    cones.push({ id: uid("c"), ...b, kind: "standing", group: "gate", groupId: g });
+    cones.push({ id: uid("c"), ...a, kind: "standing", group, groupId: g });
+    cones.push({ id: uid("c"), ...b, kind: "standing", group, groupId: g });
     if (pointer && inside) {
       const ip = inside > 0 ? a : b;
       const outward = inside > 0 ? left : scale(left, -1);
@@ -392,19 +404,26 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
     }
   };
 
-  // Walk segments.
   const segIds = [...new Set(nodes.map((n) => n.segId))];
   let lastGateS = -999;
   for (const id of segIds) {
     const idx = nodes.map((n, i) => (n.segId === id ? i : -1)).filter((i) => i >= 0);
     const n0 = nodes[idx[0]];
     const sAt = (i: number) => i * STEP;
+    const len = idx.length * STEP;
     if (n0.seg === "slalom") {
-      const spacing = n0.R;
       const g = gid();
-      for (let s = spacing; s < idx.length * STEP - spacing / 2; s += spacing) {
+      for (let s = n0.R; s < len - n0.R / 2; s += n0.R) {
         const i = idx[0] + Math.round(s / STEP);
         cones.push({ id: uid("c"), ...nodes[i].p, kind: "standing", group: "slalom", groupId: g });
+      }
+      lastGateS = sAt(idx[idx.length - 1]);
+      continue;
+    }
+    if (n0.seg === "offset") {
+      for (let s = n0.R; s < len - n0.R / 2; s += n0.R) {
+        const i = idx[0] + Math.round(s / STEP) - 1;
+        gate(i, 20, undefined, false, line[i], "offset");
       }
       lastGateS = sAt(idx[idx.length - 1]);
       continue;
@@ -414,9 +433,9 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
       const mid = idx[Math.floor(idx.length / 2)];
       gate(mid, width, n0.side, true);
       lastGateS = sAt(mid);
-      if (n0.seg === "sweeper" && idx.length * STEP > 180) {
-        gate(idx[Math.floor(idx.length * 0.15)], width, n0.side);
-        gate(idx[Math.floor(idx.length * 0.85)], width, n0.side);
+      if ((n0.seg === "sweeper" && len > 180) || (po.detail && len > 60)) {
+        gate(idx[Math.floor(idx.length * 0.12)], width + 2, n0.side);
+        gate(idx[Math.floor(idx.length * 0.88)], width + 2, n0.side);
       }
       continue;
     }
@@ -425,7 +444,7 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
       if (sAt(mid) - lastGateS > 60) { gate(mid, range(20, 24), n0.side, true); lastGateS = sAt(mid); }
       continue;
     }
-    if (n0.seg === "straight" && idx.length * STEP > 110) {
+    if (n0.seg === "straight" && len > 110) {
       const mid = idx[Math.floor(idx.length / 2)];
       if (sAt(mid) - lastGateS > 70) { gate(mid, range(22, 26)); lastGateS = sAt(mid); }
     }
@@ -437,31 +456,99 @@ function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => numbe
   for (let s = 15; s <= 75; s += 12) {
     for (const side of [1, -1]) cones.push({ id: uid("c"), ...add(add(finishP, scale(fd, s)), scale(fl, side * 20)), kind: "standing", group: "wall" });
   }
+  // Slow-down gate: a funnel that narrows to 14 ft, so drivers brake to walking pace before leaving the course.
+  if (po.slowAt && po.slowAt >= 60) {
+    for (const [back, w] of [[30, 26], [15, 20], [0, 14]] as const) {
+      const g = gid();
+      const c = add(finishP, scale(fd, po.slowAt - back));
+      for (const side of [1, -1]) cones.push({ id: uid("c"), ...add(c, scale(fl, (side * w) / 2)), kind: "standing", group: "slow", groupId: g });
+    }
+  }
 
   return { line: simplify(line, 0.4), cones };
 }
 
+/**
+ * Keeps cones on usable pavement: a gate that would sit in a Don't-use zone or off the Course area is
+ * slid sideways or narrowed (the line still passes through it); if that can't work it is left out.
+ * Single cones that don't fit are left out. Timing cones are never touched.
+ */
+export function fitCones(cones: Cone[], course: Course): { cones: Cone[]; moved: number; dropped: number } {
+  const paved = course.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+  const nogo = course.features.filter((f) => f.kind === "nogo" && f.pts.length >= 3);
+  const solids = course.features.filter((f) => f.kind === "obstacle" || f.kind === "pole" || f.kind === "surface");
+  const ok = (p: Pt) => (!paved.length || paved.some((f) => pointInPolygon(p, f.pts) && distToPath(p, f.pts, true) >= 3))
+    && !nogo.some((f) => pointInPolygon(p, f.pts) || distToShape(p, f.pts, true) < 3)
+    && !solids.some((f) => distToShape(p, f.pts, f.closed) < 4);
+  const out: Cone[] = [];
+  let moved = 0, dropped = 0;
+  const byGroup = new Map<string, Cone[]>();
+  for (const k of cones) {
+    if (k.group === "start" || k.group === "finish") { out.push(k); continue; }
+    if (k.groupId && (k.group === "gate" || k.group === "offset" || k.group === "apex" || k.group === "slow")) {
+      const arr = byGroup.get(k.groupId) ?? [];
+      arr.push(k);
+      byGroup.set(k.groupId, arr);
+      continue;
+    }
+    if (ok(k)) out.push(k); else dropped++;
+  }
+  for (const arr of byGroup.values()) {
+    const pair = arr.filter((k) => k.kind === "standing");
+    if (pair.length !== 2) { for (const k of arr) { if (ok(k)) out.push(k); else dropped++; } continue; }
+    if (arr.every(ok)) { out.push(...arr); continue; }
+    const [a, b] = pair;
+    const m = lerp(a, b, 0.5);
+    const w = dist(a, b);
+    const u = { x: (b.x - a.x) / (w || 1), y: (b.y - a.y) / (w || 1) };
+    let fixed: Cone[] | null = null;
+    for (let width = w; width >= Math.min(w, 16) && !fixed; width -= 3) {
+      for (const shift of [0, 3, -3, 6, -6, 9, -9, 12, -12]) {
+        if (Math.abs(shift) > width / 2 - 4) continue; // the line must still pass through the gate
+        const a2 = add(m, scale(u, shift - width / 2));
+        const b2 = add(m, scale(u, shift + width / 2));
+        const moveA = { x: a2.x - a.x, y: a2.y - a.y };
+        const moveB = { x: b2.x - b.x, y: b2.y - b.y };
+        const next = arr.map((k) => {
+          if (k === a) return { ...k, ...a2 };
+          if (k === b) return { ...k, ...b2 };
+          const mv = dist(k, a) < dist(k, b) ? moveA : moveB; // pointer follows its gate cone
+          return { ...k, x: k.x + mv.x, y: k.y + mv.y };
+        });
+        if (next.every(ok)) { fixed = next; break; }
+      }
+    }
+    if (fixed) { out.push(...fixed); moved++; } else dropped += arr.length;
+  }
+  return { cones: out, moved, dropped };
+}
+
+export type StraightStyle = "none" | "slalom" | "offset" | "mix";
+
 export interface LineConesOptions {
-  /** Put a slalom on straights of 250 ft or more (the line then weaves through it). */
-  slaloms: boolean;
+  /** What to put on straights of 250 ft or more. The line weaves through slaloms and offsets. */
+  straights: StraightStyle;
+  /** Entry and exit gates on turns as well as the apex. */
+  detail: boolean;
   slalomSpacing?: number;
   seed?: number;
 }
 
 /**
- * Places gates, apex pointers, slaloms and the finish chute along the driving line the user
- * drew. The line is kept as drawn unless slaloms are added (then it weaves through them).
+ * Places gates, apex pointers, slaloms/offsets, the finish chute and a slow-down gate along the
+ * driving line the user drew, keeping every cone on usable pavement.
  */
-export function conesForLine(course: Course, opt: LineConesOptions): { line: Pt[]; cones: Cone[]; counts: Record<string, number> } | null {
-  if (course.line.length < 2) return null;
-  const pts = resample(smoothPath(course.line, STEP), STEP);
+export function conesForLine(course: Course, opt: LineConesOptions): { line: Pt[]; base: Pt[]; cones: Cone[]; counts: Record<string, number>; moved: number; dropped: number } | null {
+  // Work from the line as drawn: a line that already weaves through earlier slaloms would read as many small turns.
+  const base = course.baseLine ?? (course.line.length > 120 ? simplify(course.line, 13) : course.line);
+  if (base.length < 2) return null;
+  const pts = resample(smoothPath(base, STEP), STEP);
   if (pts.length < 20) return null;
   const n = pts.length;
   const K = 8; // curvature baseline: ±16 ft
   const R = pts.map((_, i) => (i < K || i >= n - K ? Infinity : signedRadius(pts[i - K], pts[i], pts[i + K])));
   const heading = (i: number) => Math.atan2(pts[Math.min(n - 1, i + 1)].y - pts[Math.max(0, i - 1)].y, pts[Math.min(n - 1, i + 1)].x - pts[Math.max(0, i - 1)].x);
 
-  // Runs of curve (same direction, radius under 300 ft) and straight.
   type Run = { a: number; b: number; side: number };
   const runs: Run[] = [];
   for (let i = 0; i < n; i++) {
@@ -470,25 +557,29 @@ export function conesForLine(course: Course, opt: LineConesOptions): { line: Pt[
     if (last && last.side === side) last.b = i;
     else runs.push({ a: i, b: i, side });
   }
-  // Fold slivers (under 16 ft) into the run before them.
-  for (let k = runs.length - 1; k > 0; k--) {
-    if (runs[k].b - runs[k].a + 1 < 8) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
+  for (let k = runs.length - 1; k > 0; k--) if (runs[k].b - runs[k].a + 1 < 8) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
+  // Wiggles that barely change direction (under ~11°) count as straight.
+  for (const run of runs) {
+    if (run.side === 0) continue;
+    let ang = 0;
+    for (let i = run.a + 1; i <= run.b; i++) { const d = heading(i) - heading(i - 1); ang += Math.atan2(Math.sin(d), Math.cos(d)); }
+    if (Math.abs(ang) < 0.2) run.side = 0;
   }
-  for (let k = runs.length - 1; k > 0; k--) {
-    if (runs[k].side === runs[k - 1].side) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
-  }
+  for (let k = runs.length - 1; k > 0; k--) if (runs[k].side === runs[k - 1].side) { runs[k - 1].b = runs[k].b; runs.splice(k, 1); }
 
   const spacing = opt.slalomSpacing ?? 66;
   const launchEnd = Math.ceil(60 / STEP);
   const finishStart = n - Math.ceil(FIN_STRAIGHT / STEP);
   const nodes: Node[] = [];
   const counts: Record<string, number> = {};
+  let nextStraight: "slalom" | "offset" = opt.straights === "offset" ? "offset" : "slalom";
   runs.forEach((run, segId) => {
     let seg: Seg;
     let radius = Infinity;
+    // Elements only on the part of the run clear of the launch and the finish straight.
+    const a = Math.max(run.a, launchEnd), b = Math.min(run.b, finishStart - 1);
     if (run.side !== 0) {
-      let ang = 0;
-      let minR = Infinity;
+      let ang = 0, minR = Infinity;
       for (let i = run.a + 1; i <= run.b; i++) {
         let d = heading(i) - heading(i - 1);
         d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -497,20 +588,25 @@ export function conesForLine(course: Course, opt: LineConesOptions): { line: Pt[
       }
       radius = minR;
       seg = ang < 0.35 ? "kink" : minR >= 70 ? "sweeper" : ang > 2.4 ? "hairpin" : "turn";
-    } else {
-      const len = (run.b - run.a) * STEP;
-      seg = opt.slaloms && len >= 250 ? "slalom" : "straight";
-      if (seg === "slalom") radius = spacing;
-    }
+    } else if (opt.straights !== "none" && (b - a) * STEP >= 250) {
+      seg = nextStraight;
+      radius = seg === "slalom" ? spacing : 90;
+      if (opt.straights === "mix") nextStraight = nextStraight === "slalom" ? "offset" : "slalom";
+    } else seg = "straight";
     counts[seg] = (counts[seg] ?? 0) + 1;
     for (let i = run.a; i <= run.b; i++) {
-      const s = i < launchEnd ? "launch" : i >= finishStart ? "finish" : seg;
+      const s: Seg = i < launchEnd ? "launch" : i >= finishStart ? "finish" : seg;
       nodes.push({ p: pts[i], seg: s, segId: s === seg ? segId : s === "launch" ? -1 : -2, side: run.side, R: radius });
     }
   });
 
   const finDir = heading(n - 2);
   const finishP = course.finish ? lerp(course.finish.a, course.finish.b, 0.5) : pts[n - 1];
-  const placed = placeCones(nodes, finDir, finishP, mulberry32(opt.seed ?? 1));
-  return { line: counts.slalom ? placed.line : course.line, cones: placed.cones, counts };
+  const sim = simulate(base, course.settings.car, course.settings.wet);
+  const ro = finishRunout({ ...course, line: base }, sim);
+  const slowAt = ro ? Math.min(150, ro.free - 15) : 120;
+  const placed = placeCones(nodes, finDir, finishP, mulberry32(opt.seed ?? 1), { detail: opt.detail, slowAt });
+  const fit = fitCones(placed.cones, course);
+  const woven = !!(counts.slalom || counts.offset);
+  return { line: woven ? placed.line : base, base, cones: fit.cones, counts, moved: fit.moved, dropped: fit.dropped };
 }

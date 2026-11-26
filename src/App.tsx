@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { dist, type Pt } from "./geo";
-import { conesForLine, generateCourse, type GenResult, type GenStats } from "./generate";
+import { conesForLine, generateCourse, type GenResult, type GenStats, type StraightStyle } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
-import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Cone, type Course, type FeatureKind } from "./model";
-import { polygonArea } from "./geo";
+import { CAR_PRESETS, EVENT_KINDS, FEATURE_INFO, ZONE_KINDS, newCourse, type Cone, type Course, type FeatureKind } from "./model";
+import { pointInPolygon, polygonArea, smoothPath } from "./geo";
 import { checkCourse, type Issue } from "./rules";
 import Run3D from "./Run3D";
 import { simulate } from "./sim";
@@ -69,6 +69,8 @@ export default function App() {
     setCourse((prev) => {
       setPast((p) => [...p.slice(-99), prev]);
       setFuture([]);
+      // Editing the woven line by hand makes it the new drawn line.
+      if (c.line !== prev.line && c.baseLine && c.baseLine === prev.baseLine) return { ...c, baseLine: undefined };
       return c;
     });
   }, []);
@@ -294,9 +296,15 @@ export default function App() {
           )}
 
           <div className="section-sub">Site objects</div>
-          {(Object.keys(FEATURE_INFO) as FeatureKind[]).filter((k) => !ZONE_KINDS.includes(k)).map((k) => (
+          {(Object.keys(FEATURE_INFO) as FeatureKind[]).filter((k) => !ZONE_KINDS.includes(k) && !EVENT_KINDS.includes(k)).map((k) => (
             <button key={k} className={`zone ${tool === "feature" && featureKind === k ? "on" : ""}`} onClick={() => { setTool("feature"); setFeatureKind(k); }} title={FEATURE_INFO[k].help}>
               <span><i style={{ background: FEATURE_INFO[k].color }} />{FEATURE_INFO[k].label}</span>
+            </button>
+          ))}
+          <div className="section-sub">Event facilities</div>
+          {EVENT_KINDS.map((k) => (
+            <button key={k} className={`zone ${tool === "feature" && featureKind === k ? "on" : ""}`} onClick={() => { setTool("feature"); setFeatureKind(k); }} title={FEATURE_INFO[k].help}>
+              <span><b className="emo">{FEATURE_INFO[k].emoji}</b>{FEATURE_INFO[k].label}</span>
             </button>
           ))}
 
@@ -490,29 +498,39 @@ export default function App() {
       </div>
 
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
-      {genOpen && <GenerateDialog course={course} slalomSpacing={options.slalomSpacing} onCones={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Placed ${r.cones.length} cones along your line. Drag any cone to adjust; Undo to take them back.`); }} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
+      {genOpen && <GenerateDialog course={course} slalomSpacing={options.slalomSpacing} onCones={(r) => { change({ ...course, line: r.line, baseLine: r.line === r.base ? undefined : r.base, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Placed ${r.cones.length} cones along your line${r.moved ? `, moved ${r.moved} gate(s) to stay on pavement` : ""}${r.dropped ? `, left out ${r.dropped} cone(s) with no room` : ""}. Drag any cone to adjust; Undo to take them back.`); }} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
       {help && <HelpDialog onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
   );
 }
 
+/** Feet of the (smoothed) driving line outside the Course area or inside a Don't-use zone. */
+function lineOffArea(c: Course): number {
+  const paved = c.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+  const nogo = c.features.filter((f) => f.kind === "nogo" && f.pts.length >= 3);
+  const pts = smoothPath(c.line, 4);
+  return pts.filter((p) => (paved.length && !paved.some((f) => pointInPolygon(p, f.pts))) || nogo.some((f) => pointInPolygon(p, f.pts))).length * 4;
+}
+
 const SITE_TOOLS: Tool[] = ["feature", "wand", "cut", "add", "straighten", "calibrate", "image-move"];
 const COURSE_TOOLS: Tool[] = ["start", "finish", "cone", "pointer", "gate", "slalom", "wall", "line"];
 
-function GenerateDialog({ course, onClose, onApply, onPickTool, onCones, slalomSpacing }: { course: Course; onClose(): void; onApply(r: GenResult): void; onPickTool(t: Tool): void; onCones(r: { line: Pt[]; cones: Cone[] }): void; slalomSpacing: number }) {
+function GenerateDialog({ course, onClose, onApply, onPickTool, onCones, slalomSpacing }: { course: Course; onClose(): void; onApply(r: GenResult): void; onPickTool(t: Tool): void; onCones(r: { line: Pt[]; base: Pt[]; cones: Cone[]; moved: number; dropped: number }): void; slalomSpacing: number }) {
   const [technical, setTechnical] = useState(0.4);
   const [cross, setCross] = useState<boolean | null>(null);
   const hasLine = course.line.length > 1;
   const [designPath, setDesignPath] = useState(false);
-  const [slaloms, setSlaloms] = useState(false);
+  const [straights, setStraights] = useState<StraightStyle>("mix");
+  const [detail, setDetail] = useState(true);
   const placeCones = () => {
-    const r = conesForLine(course, { slaloms, slalomSpacing, seed: Math.floor(Math.random() * 1e9) });
+    const r = conesForLine(course, { straights, detail, slalomSpacing, seed: Math.floor(Math.random() * 1e9) });
     if (!r) { setMsg("ERROR:The driving line is too short to place cones along."); return; }
     const n = course.cones.filter((k) => k.group !== "start" && k.group !== "finish").length;
     if (n && !confirm(`Replace the current ${n} cones with cones along your line? Your start and finish stay. (Undo is available.)`)) return;
     onCones(r);
   };
+  const offArea = hasLine ? lineOffArea(course) : 0;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const hasPaved = course.features.some((f) => f.kind === "paved" && f.pts.length >= 3);
@@ -562,8 +580,18 @@ function GenerateDialog({ course, onClose, onApply, onPickTool, onCones, slalomS
             </ul>
             {hasLine ? (
               <>
-                <p className="small">Places gates and apex pointers in each turn, gates on long sweepers, and the finish chute, along the line you drew. Your line stays as drawn.</p>
-                <label className="chk"><input type="checkbox" checked={slaloms} onChange={(e) => setSlaloms(e.target.checked)} /> Add a slalom on straights of 250 ft or more ({slalomSpacing} ft spacing; the line will weave through it)</label>
+                <p className="small">Places gates and apex pointers in each turn, gates on long sweepers, the finish chute and a slow-down gate along the line you drew.</p>
+                <label className="row">Long straights (250 ft+)
+                  <select value={straights} onChange={(e) => setStraights(e.target.value as StraightStyle)}>
+                    <option value="mix">Mix of slaloms and offsets</option>
+                    <option value="slalom">Slaloms ({slalomSpacing} ft)</option>
+                    <option value="offset">Offset gates</option>
+                    <option value="none">Leave plain</option>
+                  </select>
+                </label>
+                <label className="chk"><input type="checkbox" checked={detail} onChange={(e) => setDetail(e.target.checked)} /> Entry and exit gates on turns, not just the apex</label>
+                <p className="small">Slaloms and offsets make the line weave through them. Cones that would land off the Course area or in a Don't-use zone are moved or left out. A slow-down gate goes after the finish.</p>
+                {offArea > 0 && <p className="gen-error">About {offArea} ft of your driving line runs outside the Course area or through a Don't-use zone (orange circles on the map). Fix the line first, or cones there will be left out.</p>}
               </>
             ) : (
               <p className="small">Click from the start line along the path you want, and click near the finish line to end there. Then come back here to place the cones.</p>

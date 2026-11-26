@@ -24,7 +24,7 @@ export interface Issue {
 }
 
 const CAR_HALF_WIDTH = 3.25;
-const PEOPLE_KINDS: FeatureKind[] = ["spectator", "paddock", "grid"];
+const PEOPLE_KINDS: FeatureKind[] = ["spectator", "paddock", "grid", "timing", "registration", "tech", "restroom", "firstaid", "impound"];
 const SOLID_KINDS: FeatureKind[] = ["obstacle", "pole", "curb"];
 
 interface CoursePoint {
@@ -58,6 +58,39 @@ function closest(points: CoursePoint[], f: Feature) {
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
 
+export interface Runout {
+  /** Finish line midpoint and the direction cars leave it (from the last part of the driving line). */
+  fp: Pt;
+  dir: number;
+  /** Distance needed to stop safely, and clear distance straight ahead. */
+  need: number;
+  free: number;
+  blocker: string;
+  finishMph: number;
+}
+
+/** How far a car can coast straight past the finish before pavement ends or something is in the way. */
+export function finishRunout(c: Course, sim: SimResult | null): Runout | null {
+  if (!sim || sim.samples.length < 2) return null;
+  const paved = c.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+  const last = sim.samples[sim.samples.length - 1];
+  const prev = sim.samples[Math.max(0, sim.samples.length - 8)];
+  const fp = c.finish ? lerp(c.finish.a, c.finish.b, 0.5) : last.p;
+  const dir = heading(prev.p, last.p);
+  const need = stoppingDistance(Math.max(last.v, 30 * FT_PER_S_PER_MPH), c.settings.car.brakeG, c.settings.wet) * 1.3 + 40;
+  let free = 0;
+  let blocker = "";
+  for (let d = 0; d <= 1200; d += 5) {
+    const q = add(fp, scale(fromAngle(dir), d));
+    if (paved.length && !paved.some((f) => pointInPolygon(q, f.pts))) { blocker = "end of the Course area"; break; }
+    const hit = c.features.find((f) => f.kind !== "paved" && f.kind !== "worker" && f.kind !== "extinguisher" && f.kind !== "emergency" && distToShape(q, f.pts, f.closed) < (PEOPLE_KINDS.includes(f.kind) ? 75 : 25));
+    if (hit) { blocker = hit.label || FEATURE_INFO[hit.kind].label; break; }
+    free = d;
+    if (d >= need + 200) break;
+  }
+  return { fp, dir, need, free, blocker, finishMph: sim.finishMph };
+}
+
 export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
   const issues: Issue[] = [];
   const st = c.settings;
@@ -70,6 +103,8 @@ export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
   if (!c.start) issues.push({ severity: "warn", title: "No start line", detail: "Place the start timing line." });
   if (!c.finish) issues.push({ severity: "warn", title: "No finish line", detail: "Place the finish timing line." });
   if (!c.features.some((f) => f.kind === "worker")) issues.push({ severity: "info", title: "No worker stations", detail: "Plan worker stations during layout, not as an afterthought." });
+  const missing = (["timing", "firstaid", "extinguisher", "emergency"] as FeatureKind[]).filter((k) => !c.features.some((f) => f.kind === k));
+  if (c.line.length > 1 && missing.length) issues.push({ severity: "info", title: `Site plan: no ${missing.map((k) => FEATURE_INFO[k].label.toLowerCase()).join(", ")}`, detail: "Mark these in Site map → Event facilities so the site plan is complete." });
 
   // --- Stays on pavement --------------------------------------------------
   if (paved.length) {
@@ -190,22 +225,7 @@ export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
     }
 
     // Finish runout and aim
-    const finish = c.finish;
-    const last = sim.samples[sim.samples.length - 1];
-    const prev = sim.samples[Math.max(0, sim.samples.length - 8)];
-    const fp = finish ? lerp(finish.a, finish.b, 0.5) : last.p;
-    const dir = heading(prev.p, last.p);
-    const need = stoppingDistance(Math.max(last.v, 30 * FT_PER_S_PER_MPH), c.settings.car.brakeG, st.wet) * 1.3 + 40;
-    let free = 0;
-    let blocker = "";
-    for (let d = 0; d <= 1200; d += 5) {
-      const q = add(fp, scale(fromAngle(dir), d));
-      if (paved.length && !paved.some((f) => pointInPolygon(q, f.pts))) { blocker = "end of pavement"; break; }
-      const hit = c.features.find((f) => f.kind !== "paved" && f.kind !== "worker" && distToShape(q, f.pts, f.closed) < (PEOPLE_KINDS.includes(f.kind) ? 75 : 25));
-      if (hit) { blocker = hit.label || FEATURE_INFO[hit.kind].label; break; }
-      free = d;
-      if (d >= need + 200) break;
-    }
+    const { fp, dir, need, free, blocker } = finishRunout(c, sim)!;
     if (free < need) issues.push({ severity: "error", title: `Finish runout ${fmt(free)} ft (need ~${fmt(need)} ft)`, detail: `Finish speed ≈ ${fmt(sim.finishMph)} mph. ${blocker ? `Runout is cut short by ${blocker}. ` : ""}Stopping from 60 mph can take well over 100 ft, far more in the wet.`, at: fp });
 
     for (const off of [-0.26, 0, 0.26]) {

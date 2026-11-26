@@ -48,10 +48,10 @@ const lc = newCourse();
 lc.features = c.features;
 lc.line = [{ x: -500, y: -250 }, { x: -200, y: -250 }, { x: -150, y: -200 }, { x: -150, y: 150 }, { x: -50, y: 230 }, { x: 150, y: 250 }, { x: 400, y: 250 }];
 lc.finish = { a: { x: 300, y: 232 }, b: { x: 300, y: 268 } };
-const lr = conesForLine(lc, { slaloms: false });
+const lr = conesForLine(lc, { straights: "none", detail: false });
 if (!lr || lr.line !== lc.line) { console.error("conesForLine should keep the drawn line"); process.exit(1); }
 const pointers = lr.cones.filter((k) => k.kind === "pointer");
 console.log("line cones:", lr.counts, "cones", lr.cones.length, "pointers", pointers.length);
 if (pointers.length < 2) { console.error("expected apex pointers in both turns"); process.exit(1); }
-const ls = conesForLine(lc, { slaloms: true })!;
+const ls = conesForLine(lc, { straights: "slalom", detail: false })!;
 if (!ls.counts.slalom || ls.line === lc.line) { console.error("slalom option should add a slalom and weave the line"); process.exit(1); }

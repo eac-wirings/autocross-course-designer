@@ -1,7 +1,8 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
-import { FT_PER_S_PER_MPH, add, dist, heading, norm, perp, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
+import { FT_PER_S_PER_MPH, add, dist, fromAngle, heading, norm, perp, pointInPolygon, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
+import { finishRunout } from "./rules";
 import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type Feature, type FeatureKind } from "./model";
 import type { Issue } from "./rules";
 import { straightenEdge } from "./shapes";
@@ -339,6 +340,9 @@ export default function MapEditor(props: Props) {
       }
       const line = !c.line.length && startMid && dist(p, startMid) > 5 ? [startMid, p] : [...c.line, p];
       P.onChange({ ...c, line });
+      const paved = c.features.filter((f) => f.kind === "paved" && f.pts.length >= 3);
+      const bad = c.features.find((f) => f.kind === "nogo" && f.pts.length >= 3 && pointInPolygon(p, f.pts));
+      if (bad || (paved.length && !paved.some((f) => pointInPolygon(p, f.pts)))) { P.onStatus(`That point is ${bad ? `in ${bad.label || "a Don't-use zone"}` : "outside the Course area"}. Backspace removes it.`); return; }
       if (!c.line.length) P.onStatus(finMid ? "Keep clicking along your path. Click near the finish line to end there." : "Keep clicking along your path. Enter or double-click to stop.");
       return;
     }
@@ -476,7 +480,8 @@ export default function MapEditor(props: Props) {
       const sel = selection?.type === "feature" && selection.id === f.id;
       const style = { interactive: siteMode, color: info.color, weight: sel ? 3 : 2, fillOpacity: f.kind === "paved" ? 0.1 : f.kind === "nogo" ? 0.35 : 0.28, dashArray: f.kind === "paved" ? "6 4" : f.kind === "nogo" ? "2 4" : undefined };
       let shape: L.Layer;
-      if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { interactive: siteMode, radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
+      if (f.pts.length === 1 && info.emoji) shape = L.marker(ll(f.pts[0]), { interactive: siteMode, keyboard: false, icon: L.divIcon({ className: "fac-icon", iconSize: [26, 26], iconAnchor: [13, 13], html: `<div style="border-color:${info.color}${sel ? ";outline:2px solid #38bdf8" : ""}">${info.emoji}</div>` }) });
+      else if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { interactive: siteMode, radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
       else if (f.closed) shape = L.polygon(f.pts.map(ll), style);
       else shape = L.polyline(f.pts.map(ll), { ...style, weight: sel ? 5 : 4 });
       if (siteMode) (shape as L.Path).bindTooltip((f.locked ? "🔒 " : "") + (f.label || info.label), { sticky: true });
@@ -562,6 +567,23 @@ export default function MapEditor(props: Props) {
         });
         mk.on("contextmenu", () => { const P = latest.current; P.onChange({ ...P.course, line: P.course.line.filter((_, j) => j !== i) }); });
       });
+    }
+
+    // Finish runout: green = clear and enough, red = the part that's missing. Shown in Course mode.
+    const ro = !siteMode && c.finish ? finishRunout(c, sim) : null;
+    if (ro) {
+      const d = fromAngle(ro.dir);
+      const half = Math.max(12, dist(c.finish!.a, c.finish!.b) / 2);
+      const band = (s0: number, s1: number) => {
+        const l = perp(d);
+        return [add(add(ro.fp, scale(d, s0)), scale(l, half)), add(add(ro.fp, scale(d, s1)), scale(l, half)), add(add(ro.fp, scale(d, s1)), scale(l, -half)), add(add(ro.fp, scale(d, s0)), scale(l, -half))].map(ll);
+      };
+      const okLen = Math.min(ro.free, ro.need);
+      if (okLen > 0) L.polygon(band(0, okLen), { color: "#22c55e", weight: 1, fillColor: "#22c55e", fillOpacity: 0.18, interactive: false }).addTo(layer);
+      if (ro.free < ro.need) L.polygon(band(ro.free, ro.need), { color: "#ef4444", weight: 2, dashArray: "4 4", fillColor: "#ef4444", fillOpacity: 0.22, interactive: false }).addTo(layer);
+      const short = ro.free < ro.need;
+      const tip = add(ro.fp, scale(d, ro.need + 10));
+      L.marker(ll(tip), { interactive: false, icon: L.divIcon({ className: `runout-label${short ? " short" : ""}`, iconSize: [190, 46], iconAnchor: [95, 23], html: `Runout: need ${Math.round(ro.need)} ft at ${Math.round(ro.finishMph)} mph<br>${short ? `clear ${Math.round(ro.free)} ft, stopped by ${ro.blocker || "?"}` : `clear ${ro.free >= ro.need + 195 ? Math.round(ro.need + 200) + "+" : Math.round(ro.free)} ft ✓`}` }) }).addTo(layer);
     }
 
     for (const [l, label] of [[c.start, "START"], [c.finish, "FINISH"]] as const) {
