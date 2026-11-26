@@ -36,6 +36,8 @@ export interface Feature {
   pts: Pt[];
   closed: boolean;
   label?: string;
+  /** Locked zones can't be reshaped, cut, added to or deleted until unlocked. */
+  locked?: boolean;
 }
 
 export interface Line2 {

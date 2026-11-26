@@ -45,21 +45,21 @@ export function cutAway(features: Feature[], shape: Pt[], targetIds: string[] | 
   const next: Feature[] = [];
   const existing = new Set(features.map((f) => f.id));
   for (const f of features) {
-    const isTarget = f.closed && f.pts.length >= 3 && (targetIds ? targetIds.includes(f.id) : f.kind === kind) && overlaps(f.pts, shape);
+    const isTarget = !f.locked && f.closed && f.pts.length >= 3 && (targetIds ? targetIds.includes(f.id) : f.kind === kind) && overlaps(f.pts, shape);
     if (!isTarget) { next.push(f); continue; }
     changed++;
     next.push(...piecesToFeatures(polygonClipping.difference(toPoly(f.pts), toPoly(shape)), f));
   }
   // Don't-use islands that were inside the removed part go with it.
   const cleaned = kind === "paved" && changed
-    ? next.filter((f) => !(existing.has(f.id) && f.kind === "nogo" && f.label?.startsWith("Island") && polygonClipping.difference(toPoly(f.pts), toPoly(shape)).length === 0))
+    ? next.filter((f) => !(existing.has(f.id) && !f.locked && f.kind === "nogo" && f.label?.startsWith("Island") && polygonClipping.difference(toPoly(f.pts), toPoly(shape)).length === 0))
     : next;
   return { features: cleaned, changed };
 }
 
 /** Merges the drawn shape into the target zone(s): the given ids, or every zone of `kind` it touches. Creates a new zone if it touches none. */
 export function addArea(features: Feature[], shape: Pt[], targetIds: string[] | null, kind: FeatureKind = "paved") {
-  const targets = features.filter((f) => f.closed && f.pts.length >= 3 && (targetIds ? targetIds.includes(f.id) : f.kind === kind && overlaps(f.pts, shape)));
+  const targets = features.filter((f) => !f.locked && f.closed && f.pts.length >= 3 && (targetIds ? targetIds.includes(f.id) : f.kind === kind && overlaps(f.pts, shape)));
   if (!targets.length) {
     const nf: Feature = { id: uid("f"), kind, pts: shape, closed: true };
     return { features: [...features, nf], changed: 0, created: nf.id };
@@ -67,7 +67,7 @@ export function addArea(features: Feature[], shape: Pt[], targetIds: string[] | 
   const merged = polygonClipping.union(toPoly(shape), ...targets.map((t) => toPoly(t.pts)));
   const pieces = piecesToFeatures(merged, targets[0]);
   // Islands now covered by the added area are no longer off limits.
-  const rest = features.filter((f) => !targets.includes(f) && !(f.kind === "nogo" && f.label?.startsWith("Island") && polygonClipping.difference(toPoly(f.pts), toPoly(shape)).length === 0));
+  const rest = features.filter((f) => !targets.includes(f) && !(!f.locked && f.kind === "nogo" && f.label?.startsWith("Island") && polygonClipping.difference(toPoly(f.pts), toPoly(shape)).length === 0));
   return { features: [...rest, ...pieces], changed: targets.length, created: pieces[0]?.id };
 }
 

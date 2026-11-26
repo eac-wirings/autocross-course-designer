@@ -21,7 +21,8 @@ It runs on Windows, macOS and Linux, needs no account or subscription, and does 
   - Separation between adjacent sections (75 ft when more than one car is on course)
   - Worker coverage, very tight turnarounds, and the balance of left and right turns
   - Wet-weather mode
-- **Auto-generate.** Builds a mixed course inside the paved area with rule margins applied. It simulates and checks many candidates and keeps the best one.
+- **Auto-generate.** Place your start and finish lines, choose whether crossovers are allowed, and it builds a mixed course between them inside the Course area with rule margins applied. It simulates and checks many candidates and keeps the best one.
+- **Clear course and zone locks.** Clear course removes cones, the driving line and timing lines but keeps zones. Lock zones so they can't be reshaped, cut or deleted by accident.
 - **3D run-through.** Drives the simulated line in driver, chase or free-orbit view, with the aerial photo as the ground.
 - **Export.** Save as an `.axcourse` project file, export KML for Google Earth, or export a printable SVG course map with a scale bar.
 

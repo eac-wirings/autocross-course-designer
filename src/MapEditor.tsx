@@ -219,7 +219,10 @@ export default function MapEditor(props: Props) {
         const s = P.selection;
         const c = P.course;
         if (s.type === "cone") P.onChange({ ...c, cones: c.cones.filter((k) => k.id !== s.id) });
-        if (s.type === "feature") P.onChange({ ...c, features: c.features.filter((f) => f.id !== s.id) });
+        if (s.type === "feature") {
+          if (c.features.find((f) => f.id === s.id)?.locked) { P.onStatus("That zone is locked. Unlock it to delete it."); return; }
+          P.onChange({ ...c, features: c.features.filter((f) => f.id !== s.id) });
+        }
         if (s.type === "line") P.onChange({ ...c, line: [] });
         P.onSelect(null);
       }
@@ -460,13 +463,13 @@ export default function MapEditor(props: Props) {
       if (f.pts.length === 1) shape = L.circleMarker(ll(f.pts[0]), { radius: f.kind === "worker" ? 8 : 6, color: info.color, fillColor: info.color, fillOpacity: 0.85, weight: sel ? 3 : 1 });
       else if (f.closed) shape = L.polygon(f.pts.map(ll), style);
       else shape = L.polyline(f.pts.map(ll), { ...style, weight: sel ? 5 : 4 });
-      (shape as L.Path).bindTooltip(f.label || info.label, { sticky: true });
+      (shape as L.Path).bindTooltip((f.locked ? "🔒 " : "") + (f.label || info.label), { sticky: true });
       shape.on("click", (e) => {
         const t = latest.current.tool;
         if (t === "select" || (t === "straighten" && f.closed)) { L.DomEvent.stop(e); latest.current.onSelect({ type: "feature", id: f.id }); setStraightFrom(null); }
       });
       shape.addTo(layer);
-      if (sel && tool === "straighten" && f.closed) {
+      if (sel && tool === "straighten" && f.closed && !f.locked) {
         f.pts.forEach((p, i) => {
           const first = straightFrom === i;
           const mk = L.marker(ll(p), { icon: first ? straightFirstIcon : straightIcon, title: first ? "Start corner" : "Click to straighten to here" }).addTo(layer);
@@ -483,7 +486,7 @@ export default function MapEditor(props: Props) {
           });
         });
       }
-      if (sel && editable) {
+      if (sel && editable && !f.locked) {
         f.pts.forEach((p, i) => {
           const mk = L.marker(ll(p), { icon: vertexIcon, draggable: true }).addTo(layer);
           mk.on("dragend", () => {

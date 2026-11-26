@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { dist, type Pt } from "./geo";
-import { generateCourse, suggestedLength, type GenResult } from "./generate";
+import { generateCourse, type GenResult, type GenStats } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
 import { CAR_PRESETS, FEATURE_INFO, ZONE_KINDS, newCourse, type Course, type FeatureKind } from "./model";
@@ -67,11 +67,12 @@ export default function App() {
   /** Cut / Add shapes act on the selected zone, or on every Course area they touch. */
   function onShapeOp(op: "cut" | "add", pts: Pt[]) {
     const sel = selection?.type === "feature" ? course.features.find((f) => f.id === selection.id && f.closed) : undefined;
+    if (sel?.locked) { setStatus("That zone is locked. Unlock it first (Selected panel or the lock in the Zones list)."); return; }
     const targets = sel ? [sel.id] : null;
     const kind = sel?.kind ?? "paved";
     if (op === "cut") {
       const r = cutAway(course.features, pts, targets, kind);
-      if (!r.changed) { setStatus(sel ? "That shape doesn't overlap the selected zone." : "That shape doesn't overlap any Course area. Select a zone first to cut a different kind."); return; }
+      if (!r.changed) { setStatus(sel ? "That shape doesn't overlap the selected zone." : "That shape doesn't overlap any unlocked Course area. Select a zone first to cut a different kind."); return; }
       change({ ...course, features: r.features });
       if (sel && !r.features.some((f) => f.id === sel.id)) setSelection(null);
       setStatus(`Cut away from ${r.changed} zone(s). Draw again to cut more, or press Esc.`);
@@ -82,6 +83,16 @@ export default function App() {
       setStatus(r.changed ? `Added to ${r.changed} zone(s).` : "Didn't touch a Course area, so it was added as a new one.");
     }
   }
+
+  const setLocked = (ids: string[], locked: boolean) => change({ ...course, features: course.features.map((f) => (ids.includes(f.id) ? { ...f, locked } : f)) });
+  const clearCourse = () => {
+    const n = course.cones.length;
+    if (!n && !course.line.length && !course.start && !course.finish) { setStatus("Nothing to clear: there are no cones, driving line or timing lines."); return; }
+    if (!confirm(`Clear the course? This removes all ${n} cones, the driving line and the start and finish lines. Your zones and site objects stay. (Undo is available.)`)) return;
+    change({ ...course, cones: [], line: [], start: null, finish: null });
+    setSelection(null);
+    setStatus("Course cleared. Zones kept.");
+  };
 
   // Smoothing slider: always simplify from the outline as it was when the zone was selected.
   const [smooth, setSmooth] = useState<{ id: string; base: Pt[]; tol: number } | null>(null);
@@ -220,6 +231,7 @@ export default function App() {
           <option value="osm">Street map</option>
           <option value="none">No background</option>
         </select>
+        <button onClick={clearCourse} title="Remove all cones, the driving line and the timing lines; keep zones">Clear course</button>
         <button className="primary" onClick={() => setGenOpen(true)}>Auto-generate</button>
         <button className="primary" disabled={!sim} onClick={() => setShow3D(true)} title={sim ? "" : "Draw a driving line first"}>3D run-through</button>
         <button onClick={() => setHelp(true)}>Help</button>
@@ -352,13 +364,14 @@ export default function App() {
               {selFeat && (
                 <div className="props">
                   <label>Type
-                    <select value={selFeat.kind} onChange={(e) => { const k = e.target.value as FeatureKind; change({ ...course, features: course.features.map((f) => (f.id === selFeat.id ? { ...f, kind: k, closed: FEATURE_INFO[k].closed && f.pts.length >= 3 } : f)) }); }}>
+                    <select value={selFeat.kind} disabled={selFeat.locked} onChange={(e) => { const k = e.target.value as FeatureKind; change({ ...course, features: course.features.map((f) => (f.id === selFeat.id ? { ...f, kind: k, closed: FEATURE_INFO[k].closed && f.pts.length >= 3 } : f)) }); }}>
                       {(Object.keys(FEATURE_INFO) as FeatureKind[]).map((k) => <option key={k} value={k}>{FEATURE_INFO[k].label}</option>)}
                     </select>
                   </label>
                   <label>Label <input value={selFeat.label ?? ""} onChange={(e) => setCourse({ ...course, features: course.features.map((f) => (f.id === selFeat.id ? { ...f, label: e.target.value } : f)) })} /></label>
-                  <div className="small">{FEATURE_INFO[selFeat.kind].help} Drag the white handles to reshape, drag a small midpoint dot to add a corner, right-click a handle to remove it.</div>
-                  {selFeat.closed && (
+                  <div className="small">{FEATURE_INFO[selFeat.kind].help} {selFeat.locked ? "Locked, so it can't be reshaped, cut or deleted." : "Drag the white handles to reshape, drag a small midpoint dot to add a corner, right-click a handle to remove it."}</div>
+                  <button className={selFeat.locked ? "on" : ""} onClick={() => setLocked([selFeat.id], !selFeat.locked)}>{selFeat.locked ? "🔒 Locked: click to unlock" : "🔓 Lock this zone"}</button>
+                  {selFeat.closed && !selFeat.locked && (
                     <>
                       <div className="seg-row">
                         <button className={tool === "cut" ? "on" : ""} onClick={() => setTool("cut")} title={TOOLS.find((t) => t.id === "cut")!.hint}>✂ Cut away</button>
@@ -379,7 +392,7 @@ export default function App() {
                       </label>
                     </>
                   )}
-                  <button onClick={() => { change({ ...course, features: course.features.filter((f) => f.id !== selFeat.id) }); setSelection(null); }}>Delete</button>
+                  {!selFeat.locked && <button onClick={() => { change({ ...course, features: course.features.filter((f) => f.id !== selFeat.id) }); setSelection(null); }}>Delete</button>}
                 </div>
               )}
               {selection?.type === "line" && (
@@ -393,7 +406,12 @@ export default function App() {
           )}
 
           <section>
-            <h3>Zones</h3>
+            <h3>Zones {(() => {
+              const zs = course.features.filter((f) => ZONE_KINDS.includes(f.kind) && f.closed);
+              if (!zs.length) return null;
+              const all = zs.every((f) => f.locked);
+              return <button className="mini" onClick={() => { setLocked(zs.map((f) => f.id), !all); setStatus(all ? "Zones unlocked." : "All zones locked. They can't be reshaped, cut or deleted until unlocked."); }}>{all ? "🔓 Unlock all" : "🔒 Lock all"}</button>;
+            })()}</h3>
             {course.features.filter((f) => ZONE_KINDS.includes(f.kind) && f.closed).length === 0 ? (
               <div className="small">No zones yet. Start with <b>1 Site zones → Course area</b> to mark where the course may go, then Paddock and Don't use.</div>
             ) : (
@@ -405,6 +423,7 @@ export default function App() {
                     <li key={f.id} className={sel ? "on" : ""} onClick={() => { setTool("select"); setSelection({ type: "feature", id: f.id }); mapRef.current?.focus({ x: f.pts.reduce((a, p) => a + p.x, 0) / f.pts.length, y: f.pts.reduce((a, p) => a + p.y, 0) / f.pts.length }); }}>
                       <i style={{ background: FEATURE_INFO[f.kind].color }} />
                       <span>{f.label || FEATURE_INFO[f.kind].label}</span>
+                      <button className="lock" title={f.locked ? "Locked: click to unlock" : "Lock this zone"} onClick={(e) => { e.stopPropagation(); setLocked([f.id], !f.locked); }}>{f.locked ? "🔒" : "🔓"}</button>
                       <em>{sqft >= 43560 ? `${(sqft / 43560).toFixed(2)} ac` : `${Math.round(sqft).toLocaleString()} ft²`}</em>
                     </li>
                   );
@@ -442,43 +461,39 @@ export default function App() {
       </div>
 
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
-      {genOpen && <GenerateDialog course={course} onClose={() => setGenOpen(false)} onApply={(r) => { change({ ...course, line: r.line, cones: r.cones, start: r.start, finish: r.finish }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph.${r.note ? " " + r.note : ""}`); }} />}
+      {genOpen && <GenerateDialog course={course} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
       {help && <HelpDialog onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
   );
 }
 
-function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(): void; onApply(r: GenResult): void }) {
-  const [target, setTarget] = useState(() => suggestedLength(course));
+function GenerateDialog({ course, onClose, onApply, onPickTool }: { course: Course; onClose(): void; onApply(r: GenResult): void; onPickTool(t: Tool): void }) {
   const [technical, setTechnical] = useState(0.4);
-  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 100000));
+  const [cross, setCross] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const hasPaved = course.features.some((f) => f.kind === "paved" && f.pts.length >= 3);
+  const ready = hasPaved && !!course.start && !!course.finish;
   const run = () => {
     setBusy(true);
     setMsg("Generating and checking candidate courses…");
     setTimeout(() => {
-      // Try the requested length, then shorter ones if the site is too tight.
-      let r: GenResult | null = null;
-      let used = target;
-      const stats = { noStart: 0, noFinish: 0, lengths: [] as number[] };
-      for (const f of [1, 0.75, 0.55, 0.4]) {
-        used = Math.round((target * f) / 100) * 100;
-        if (used < 800) break;
-        r = generateCourse(course, { targetLengthFt: used, seed, attempts: 150, technical, stats, timeBudgetMs: 6000 });
-        if (r) break;
-      }
+      const stats: GenStats = { noStart: 0, noFinish: 0, lengths: [] };
+      const r = generateCourse(course, { seed: Math.floor(Math.random() * 1e9), attempts: 150, technical, allowCrossovers: !!cross, stats, timeBudgetMs: 8000 });
       setBusy(false);
       if (!r) {
-        setMsg(stats.noStart >= stats.noFinish
-          ? "ERROR:Couldn't find a safe place to start. Make the Course area bigger, or check that Don't-use, obstacle and people zones aren't covering it (margins: 25 ft to obstacles, 75 ft to people, 20 ft to Don't-use)."
-          : `ERROR:Couldn't fit a course with a finish and safe runout (longest attempt ${Math.max(0, ...stats.lengths)} ft). Try a different seed, a more technical style, or a larger Course area.`);
+        setMsg("ERROR:" + (stats.reason === "start"
+          ? "There isn't 120 ft of clear Course area straight ahead of the start line, in either direction. Move the start line or adjust the zones."
+          : stats.reason === "finish"
+          ? "The finish line needs 70 ft of straight approach and about 200 ft of clear runout beyond it, inside the Course area and away from people. Move the finish line or adjust the zones."
+          : Math.max(0, ...stats.lengths) < 300
+          ? "The course can't get going past the start: there's no room to turn after the launch. Aim the start down a longer stretch of Course area."
+          : `Couldn't connect the start to the finish with a safe course (longest attempt ${Math.max(0, ...stats.lengths)} ft). Try again, try ${cross ? "a more technical style" : "allowing crossovers"}, or move the start or finish so there's more room between them.`));
         return;
       }
-      if (course.cones.length && !confirm(`Replace the current ${course.cones.length} cones and driving line with the generated course? (Undo is available.)`)) return;
-      if (used !== target) r = { ...r, note: `Shortened to fit: asked for ${target} ft.` };
+      const n = course.cones.filter((k) => k.group !== "start" && k.group !== "finish").length;
+      if ((n || course.line.length) && !confirm(`Replace the current ${n} cones and driving line with the generated course? Your start and finish stay. (Undo is available.)`)) return;
       onApply(r);
     }, 30);
   };
@@ -486,18 +501,35 @@ function GenerateDialog({ course, onClose, onApply }: { course: Course; onClose(
     <div className="modal-bg">
       <div className="modal">
         <h2>Auto-generate a course</h2>
-        {!hasPaved ? <p>First outline the usable pavement with <b>Site area / object → Paved area</b>, and mark obstacles, light poles, spectator, paddock and grid areas. The generator keeps the course inside the pavement with Solo Rules margins.</p> : (
+        {!hasPaved ? (
+          <p>First outline the usable pavement with <b>1 Site zones → Course area</b> (or ✦ Find pavement), and mark Don't-use, obstacle, spectator, paddock and grid areas.</p>
+        ) : !ready ? (
           <>
-            <p className="small">Builds a mix of sweepers, 90s, slaloms (60–74 ft) and offsets with alternating directions, keeps straights short, fits a finish with runout, then simulates and rule-checks 150 candidates and keeps the best. Treat it as a starting point and refine by hand.</p>
-            <label className="row">Target length <input type="number" step={100} value={target} onChange={(e) => setTarget(+e.target.value)} /> ft</label>
+            <p>Place your timing lines first. The course is built from your start to your finish.</p>
+            <ul className="gen-steps">
+              <li className={course.start ? "done" : ""}>{course.start ? "✓ Start line placed" : <button onClick={() => onPickTool("start")}>Place start line</button>}</li>
+              <li className={course.finish ? "done" : ""}>{course.finish ? "✓ Finish line placed" : <button onClick={() => onPickTool("finish")}>Place finish line</button>}</li>
+            </ul>
+            <p className="small">Click both timing lights for each line. Leave about 120 ft of room after the start, and 70 ft of approach plus about 200 ft of runout around the finish.</p>
+          </>
+        ) : (
+          <>
+            <p className="small">Builds sweepers, 90s, slaloms and offsets from your start line to your finish line, keeping the Course area margins, then simulates and rule-checks the candidates and keeps the best. Treat it as a starting point.</p>
+            <div className="gen-q">
+              <div>Allow crossovers?</div>
+              <div className="seg-row">
+                <button className={cross === false ? "on" : ""} onClick={() => setCross(false)}>No</button>
+                <button className={cross === true ? "on" : ""} onClick={() => setCross(true)}>Yes</button>
+              </div>
+              <div className="small">Crossovers let the course cross itself at a steep angle (up to twice). Only for running one car on course at a time.</div>
+            </div>
             <label className="row">Style: open <input type="range" min={0} max={1} step={0.1} value={technical} onChange={(e) => setTechnical(+e.target.value)} /> technical</label>
-            <label className="row">Seed <input type="number" value={seed} onChange={(e) => setSeed(+e.target.value)} /> <button onClick={() => setSeed(Math.floor(Math.random() * 100000))}>Random</button></label>
           </>
         )}
         {msg && (msg.startsWith("ERROR:") ? <p className="gen-error">{msg.slice(6)}</p> : <p className="small">{msg}</p>)}
         <div className="actions">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!hasPaved || busy} onClick={run}>{busy ? "Working…" : "Generate"}</button>
+          <button className="primary" disabled={!ready || cross === null || busy} onClick={run} title={ready && cross === null ? "Answer the crossover question first" : ""}>{busy ? "Working…" : "Generate"}</button>
         </div>
       </div>
     </div>
@@ -526,7 +558,7 @@ function HelpDialog({ onClose }: { onClose(): void }) {
         <ol>
           <li><b>Find the site.</b> Search an address or "lat, lng", or import a Google Earth Pro screenshot (<i>Import image</i>, then set its scale) or KML of placemarks you traced in Google Earth.</li>
           <li><b>Define zones.</b> The fastest way is <b>Find pavement</b>: click inside a lot or runway and the app outlines it from the aerial photo (Shift-click to add more, adjust Tolerance to grow or shrink). Or draw zones by hand under <i>Site zones</i>: draw the <b>Course area</b> (where the course may go), the <b>Paddock</b>, and any <b>Don't use</b> areas, plus grid and spectator areas. Draw rectangles with two corner clicks, or switch to Polygon for odd shapes. Then mark light poles, curbs, buildings/fences and surface hazards under <i>Site objects</i>.</li>
-          <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or click <i>Auto-generate</i>.</li>
+          <li><b>Design.</b> Draw the <b>driving line</b> from start to finish, place the start and finish lines, then gates, slaloms, pointer cones and walls. Or place the start and finish lines and click <i>Auto-generate</i>: it builds the course between them, and asks whether crossovers are allowed. <i>Clear course</i> removes cones, line and timing lines but keeps your zones. Use the 🔒 in the Zones list (or <i>Lock all</i>) so finished zones can't be changed by accident.</li>
           <li><b>Check.</b> The right panel re-checks every change: 25 ft to solid objects (50 ft with karts), 75 ft to people, pavement edges, top speed (mid‑60s mph), long acceleration zones, slalom spacing, gate width, finish runout and aim, and worker coverage. Click an item to jump to it.</li>
           <li><b>Drive it.</b> <i>3D run-through</i> drives the simulated line in driver, chase or free-orbit view.</li>
           <li><b>Share.</b> Save the .axcourse project, export KML to view it in Google Earth, or export a printable SVG course map.</li>

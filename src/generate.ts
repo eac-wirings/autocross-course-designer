@@ -1,32 +1,44 @@
 import {
   add,
-  bbox,
   dist,
   distToPath,
+  distToSegment,
   distToShape,
   fromAngle,
+  lerp,
   mulberry32,
   perp,
   pointInPolygon,
   polygonArea,
   scale,
   simplify,
+  sub,
   type Pt,
 } from "./geo";
 import { uid, type Cone, type Course, type FeatureKind } from "./model";
 import { checkCourse } from "./rules";
 import { simulate } from "./sim";
 
+export interface GenStats {
+  noStart: number;
+  noFinish: number;
+  lengths: number[];
+  /** Set when generation can't begin: "gates" (start/finish missing), "start" (no room ahead of it), "finish" (no approach or runout). */
+  reason?: "gates" | "start" | "finish";
+}
+
 export interface GenOptions {
-  targetLengthFt: number;
   seed: number;
   attempts: number;
   /** 0 = flowing/open, 1 = technical/tight */
   technical: number;
+  /** Let the course cross over itself (at a steep angle, at most twice). */
+  allowCrossovers?: boolean;
+  /** Rough course length to aim for; defaults to a size that suits the site. */
+  targetLengthFt?: number;
   /** Stop searching after this long (default 8 s). */
   timeBudgetMs?: number;
-  /** Filled in with why attempts failed, for the UI. */
-  stats?: { noStart: number; noFinish: number; lengths: number[] };
+  stats?: GenStats;
 }
 
 export interface GenResult {
@@ -40,13 +52,18 @@ export interface GenResult {
   lengthFt: number;
   timeS: number;
   maxMph: number;
-  note?: string;
+  crossovers: number;
 }
 
 type Seg = "launch" | "straight" | "sweeper" | "turn" | "hairpin" | "slalom" | "kink" | "finish";
 interface Node { p: Pt; seg: Seg; segId: number; side: number; R: number }
+interface Piece { seg: Seg; side: number; R: number; weave?: number; pts: Pt[]; dir: number }
 
 const STEP = 2;
+const FIN_STRAIGHT = 70;
+const RUNOUT = 200;
+const TAU = Math.PI * 2;
+const mod2pi = (a: number) => ((a % TAU) + TAU) % TAU;
 
 export function suggestedLength(c: Course): number {
   // Usable area: course areas minus Don't-use islands inside them.
@@ -57,9 +74,66 @@ export function suggestedLength(c: Course): number {
   return Math.round(Math.min(4500, Math.max(1200, Math.sqrt(area) * 3.2)) / 100) * 100;
 }
 
+const straightFrom = (pos: Pt, dir: number, len: number): Pt[] => {
+  const pts: Pt[] = [];
+  const n = Math.max(1, Math.round(len / STEP));
+  for (let i = 1; i <= n; i++) pts.push(add(pos, scale(fromAngle(dir), (len * i) / n)));
+  return pts;
+};
+const arcFrom = (pos: Pt, dir: number, R: number, ang: number, side: number): Pt[] => {
+  const center = add(pos, scale(perp(fromAngle(dir)), side * R));
+  const a0 = Math.atan2(pos.y - center.y, pos.x - center.x);
+  const n = Math.max(2, Math.ceil((R * ang) / STEP));
+  const pts: Pt[] = [];
+  for (let i = 1; i <= n; i++) {
+    const a = a0 + (side * ang * i) / n;
+    pts.push({ x: center.x + R * Math.cos(a), y: center.y + R * Math.sin(a) });
+  }
+  return pts;
+};
+const piecesLen = (ps: Piece[]) => ps.reduce((a, p) => a + p.pts.length * STEP, 0);
+
+/** Turn-straight-turn paths (Dubins CSC) from one pose to another with turn radius R, shortest first. */
+export function connectors(pos: Pt, dir: number, goal: Pt, goalDir: number, R: number): Piece[][] {
+  const out: Piece[][] = [];
+  for (const s1 of [1, -1]) for (const s2 of [1, -1]) {
+    const c1 = add(pos, scale(perp(fromAngle(dir)), s1 * R));
+    const c2 = add(goal, scale(perp(fromAngle(goalDir)), s2 * R));
+    const w = sub(c2, c1);
+    const k = (s2 - s1) * R;
+    const ww = w.x * w.x + w.y * w.y;
+    if (ww < k * k + 1) continue;
+    const L = Math.sqrt(ww - k * k);
+    const psi = Math.atan2(w.y, w.x) - Math.atan2(k, L);
+    const ang1 = mod2pi(s1 * (psi - dir));
+    const ang2 = mod2pi(s2 * (goalDir - psi));
+    if (ang1 > 3.3 || ang2 > 3.3) continue;
+    const segFor = (ang: number): Seg => (ang < 0.5 ? "kink" : R >= 65 ? "sweeper" : ang > 2.5 ? "hairpin" : "turn");
+    const pieces: Piece[] = [];
+    let p = pos;
+    if (ang1 * R > 4) { const pts = arcFrom(p, dir, R, ang1, s1); pieces.push({ seg: segFor(ang1), side: s1, R, pts, dir: psi }); p = pts[pts.length - 1]; }
+    if (L > 4) { const pts = straightFrom(p, psi, L); pieces.push({ seg: "straight", side: 0, R: Infinity, pts, dir: psi }); p = pts[pts.length - 1]; }
+    if (ang2 * R > 4) { const pts = arcFrom(p, psi, R, ang2, s2); pieces.push({ seg: segFor(ang2), side: s2, R, pts, dir: goalDir }); }
+    if (pieces.length) out.push(pieces);
+  }
+  return out.sort((a, b) => piecesLen(a) - piecesLen(b));
+}
+
+function segIntersect(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const o = (p: Pt, q: Pt, r: Pt) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+}
+
+/**
+ * Builds a course from the placed start line to the placed finish line. Returns null when
+ * nothing fits; `opt.stats` says why.
+ */
 export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i: number) => void): GenResult | null {
+  const stats = opt.stats ?? { noStart: 0, noFinish: 0, lengths: [] };
   const paved = course.features.filter((f) => f.kind === "paved" && f.pts.length >= 3 && polygonArea(f.pts) > 400);
   if (!paved.length) return null;
+  if (!course.start || !course.finish) { stats.reason = "gates"; return null; }
+  const target = opt.targetLengthFt ?? suggestedLength(course);
   const karts = course.settings.karts;
   const solidMargin = (karts ? 50 : 25) + 10;
   const of = (k: FeatureKind[]) => course.features.filter((f) => k.includes(f.kind));
@@ -67,108 +141,133 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
   const people = of(["spectator", "paddock", "grid"]);
   const surface = of(["surface"]);
   const nogo = of(["nogo"]).filter((f) => f.pts.length >= 3);
-  const grid = of(["grid"])[0];
 
-  const safe = (p: Pt, edge = 18, peopleMargin = 90) => {
+  const safe = (p: Pt, edge = 15, peopleMargin = 90) => {
     if (!paved.some((f) => pointInPolygon(p, f.pts))) return false;
     if (Math.min(...paved.map((f) => distToPath(p, f.pts, true))) < edge) return false;
     for (const f of solids) if (distToShape(p, f.pts, f.closed) < (f.kind === "curb" ? 35 : solidMargin)) return false;
     for (const f of people) if (distToShape(p, f.pts, f.closed) < peopleMargin) return false;
     for (const f of surface) if (distToShape(p, f.pts, f.closed) < 10) return false;
-    for (const f of nogo) if (distToShape(p, f.pts, true) < 20) return false;
+    for (const f of nogo) if (distToShape(p, f.pts, true) < 15) return false;
     return true;
   };
 
-  const all = paved.flatMap((f) => f.pts);
-  const bb = bbox(all);
+  // The car launches straight ahead from the start line, either way across it.
+  const startP = lerp(course.start.a, course.start.b, 0.5);
+  const sAng = Math.atan2(course.start.b.y - course.start.a.y, course.start.b.x - course.start.a.x);
+  const launchDirs = [sAng + Math.PI / 2, sAng - Math.PI / 2].filter((d) => straightFrom(startP, d, 120).filter((_, i) => i % 5 === 4).every((q) => safe(q, 10)));
+  if (!launchDirs.length) { stats.reason = "start"; return null; }
+
+  // The finish needs a straight approach and a clear runout beyond it.
+  const finishP = lerp(course.finish.a, course.finish.b, 0.5);
+  const fAng = Math.atan2(course.finish.b.y - course.finish.a.y, course.finish.b.x - course.finish.a.x);
+  const finDirs = [fAng + Math.PI / 2, fAng - Math.PI / 2].filter((d) => {
+    for (let s = -FIN_STRAIGHT; s <= 0; s += 10) if (!safe(add(finishP, scale(fromAngle(d), s)), 10)) return false;
+    for (let s = 10; s <= RUNOUT; s += 10) if (!safe(add(finishP, scale(fromAngle(d), s)), 6, 120)) return false;
+    return true;
+  });
+  if (!finDirs.length) { stats.reason = "finish"; return null; }
 
   let best: GenResult | null = null;
   const t0 = Date.now();
   for (let attempt = 0; attempt < opt.attempts; attempt++) {
-    // Good enough, or taking too long: stop early.
-    if (best && attempt >= 40 && best.errors === 0 && Math.abs(best.lengthFt - opt.targetLengthFt) < opt.targetLengthFt * 0.12) break;
+    if (best && attempt >= 40 && best.errors === 0 && best.lengthFt >= target * 0.6) break;
     if (Date.now() - t0 > (opt.timeBudgetMs ?? 8000)) break;
     onProgress?.(attempt);
     const rnd = mulberry32(opt.seed * 7919 + attempt * 104729);
     const r = attemptOnce(rnd);
     if (!r) continue;
-    const draft: Course = { ...course, line: r.line, cones: r.cones, start: r.start, finish: r.finish };
+    const draft: Course = { ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] };
     const sim = simulate(r.line, course.settings.car, course.settings.wet);
     if (!sim) continue;
     const issues = checkCourse(draft, sim);
     const errors = issues.filter((i) => i.severity === "error").length;
     const warnings = issues.filter((i) => i.severity === "warn").length;
-    const score = errors * 100 + warnings * 12 + Math.abs(sim.lengthFt - opt.targetLengthFt) / 15 + Math.max(0, sim.maxMph - 58) * 8 + Math.max(0, 38 - sim.avgMph) * 2;
+    // Length matters little: only very short or very long courses lose points.
+    const lenPenalty = (Math.max(0, target * 0.6 - sim.lengthFt) + Math.max(0, sim.lengthFt - target * 1.4)) / 15;
+    const score = errors * 100 + warnings * 12 + lenPenalty + Math.max(0, sim.maxMph - 58) * 8 + Math.max(0, 38 - sim.avgMph) * 2;
     if (!best || score < best.score) best = { ...r, score, errors, warnings, lengthFt: sim.lengthFt, timeS: sim.timeS, maxMph: sim.maxMph };
   }
   return best;
 
   function attemptOnce(rnd: () => number) {
     const range = (a: number, b: number) => a + rnd() * (b - a);
-
-    // Start position: near the grid if there is one, otherwise anywhere safe.
-    let startP: Pt | null = null;
-    let startDir = 0;
-    for (let i = 0; i < 400 && !startP; i++) {
-      const p = { x: range(bb.minX, bb.maxX), y: range(bb.minY, bb.maxY) };
-      if (!safe(p, 25)) continue;
-      if (grid && i < 300) {
-        const d = distToShape(p, grid.pts, true);
-        if (d > 250 + i) continue;
-      }
-      for (let k = 0; k < 12; k++) {
-        const dir = rnd() * Math.PI * 2;
-        let ok = true;
-        for (let s = 0; s <= 160; s += 10) if (!safe(add(p, scale(fromAngle(dir), s)), 25)) { ok = false; break; }
-        if (ok) { startP = p; startDir = dir; break; }
-      }
-    }
-    if (!startP) { if (opt.stats) opt.stats.noStart++; return null; }
+    const startDir = launchDirs[Math.floor(rnd() * launchDirs.length)];
+    const finDir = finDirs[Math.floor(rnd() * finDirs.length)];
+    const fd = fromAngle(finDir);
+    const approach = add(finishP, scale(fd, -FIN_STRAIGHT));
+    // Keep the course away from the finish chute and runout.
+    const chuteA = add(finishP, scale(fd, -FIN_STRAIGHT - 40));
+    const chuteB = add(finishP, scale(fd, RUNOUT + 20));
+    const clearOfFinish = (q: Pt) => distToSegment(q, chuteA, chuteB) > 60;
+    // The connection into the finish may come from any side, but not through the finish or runout.
+    const clearOfRunout = (q: Pt) => {
+      const v = sub(q, finishP);
+      return v.x * fd.x + v.y * fd.y < -30 || Math.abs(v.x * -fd.y + v.y * fd.x) > 60;
+    };
 
     const nodes: Node[] = [{ p: startP, seg: "launch", segId: 0, side: 0, R: Infinity }];
-    let pos = startP;
-    let dir = startDir;
-    let segId = 0;
-    let straightRun = 0;
-    let lastSide = rnd() < 0.5 ? 1 : -1;
-    let length = 0;
-    let bestCut: { idx: number; dir: number; pos: Pt; score: number } | null = null;
+    let crossings = 0;
+    let lastCross = { i: -999, at: -999 };
 
-    const selfClear = (cand: Pt[], from: number) => {
-      // keep 70 ft from earlier parts of the course (not the most recent 160 ft)
+    /** Keeps 70 ft from earlier parts of the course; with crossovers on, a steep actual crossing is allowed. */
+    const checkPiece = (from: Pt, cand: Pt[]): { ok: boolean; cross?: number } => {
       const limit = nodes.length - Math.ceil(160 / STEP);
+      let need = false;
+      let prev = from;
       for (const q of cand) {
-        for (let i = 0; i < limit; i += 3) if (dist(q, nodes[i].p) < 70) return false;
-        void from;
+        const h = Math.atan2(q.y - prev.y, q.x - prev.x);
+        prev = q;
+        for (let i = 0; i < limit; i += 3) {
+          if (dist(q, nodes[i].p) >= 70) continue;
+          if (!opt.allowCrossovers || i < 60) return { ok: false };
+          if (Math.abs(i - lastCross.i) < 60 && nodes.length - lastCross.at < 150) continue;
+          const a = nodes[Math.max(0, i - 2)].p, b = nodes[Math.min(nodes.length - 1, i + 2)].p;
+          if (Math.abs(Math.sin(h - Math.atan2(b.y - a.y, b.x - a.x))) < 0.8) return { ok: false };
+          need = true;
+        }
       }
-      return true;
+      if (!need) return { ok: true };
+      if (crossings >= 2) return { ok: false };
+      // It must actually cross, not just aim at the earlier section.
+      const path = [from, ...cand];
+      for (let k = 1; k < path.length; k++) {
+        for (let i = 1; i < limit; i++) if (segIntersect(path[k - 1], path[k], nodes[i - 1].p, nodes[i].p)) return { ok: true, cross: i };
+      }
+      return { ok: false };
+    };
+    const commit = (pc: Piece, segId: number, cross?: number) => {
+      for (const p of pc.pts) nodes.push({ p, seg: pc.seg, segId, side: pc.side, R: pc.weave ?? pc.R });
+      if (cross !== undefined) { crossings++; lastCross = { i: cross, at: nodes.length }; }
     };
 
-    const buildStraight = (len: number): { pts: Pt[]; dir: number } => {
-      const pts: Pt[] = [];
-      for (let s = STEP; s <= len; s += STEP) pts.push(add(pos, scale(fromAngle(dir), s)));
-      return { pts, dir };
-    };
-    const buildArc = (R: number, ang: number, side: number): { pts: Pt[]; dir: number } => {
-      const center = add(pos, scale(perp(fromAngle(dir)), side * R));
-      const a0 = Math.atan2(pos.y - center.y, pos.x - center.x);
-      const pts: Pt[] = [];
-      const n = Math.max(2, Math.ceil((R * ang) / STEP));
-      for (let i = 1; i <= n; i++) {
-        const a = a0 + side * (ang * i) / n;
-        pts.push({ x: center.x + R * Math.cos(a), y: center.y + R * Math.sin(a) });
-      }
-      return { pts, dir: dir + side * ang };
-    };
+    let segId = 0;
+    let dir = startDir;
+    const launch = straightFrom(startP, startDir, range(70, 110));
+    commit({ seg: "launch", side: 0, R: Infinity, pts: launch, dir }, segId);
+    let pos = launch[launch.length - 1];
+    let straightRun = launch.length * STEP;
+    let lastSide = rnd() < 0.5 ? 1 : -1;
+    let length = straightRun;
+    let bestCut: { idx: number; segId: number; pieces: Piece[]; crossings: number; total: number; cross?: number } | null = null;
 
-    const launch = buildStraight(range(70, 110));
-    for (const p of launch.pts) nodes.push({ p, seg: "launch", segId, side: 0, R: Infinity });
-    pos = launch.pts[launch.pts.length - 1];
-    straightRun = launch.pts.length * STEP;
-    length += straightRun;
+    const tryFinish = () => {
+      for (const R of [35, 45, 65, 95, 130]) {
+        for (const pieces of connectors(pos, dir, approach, finDir, R)) {
+          const pts = pieces.flatMap((p) => p.pts);
+          if (!pts.every((q) => safe(q))) continue;
+          if (!pts.every(clearOfRunout)) continue;
+          const chk = checkPiece(pos, pts);
+          if (!chk.ok) continue;
+          const total = length + piecesLen(pieces) + FIN_STRAIGHT;
+          if (!bestCut || Math.abs(total - target) < Math.abs(bestCut.total - target)) bestCut = { idx: nodes.length, segId, pieces, crossings, total, cross: chk.cross };
+          return;
+        }
+      }
+    };
 
     let stuck = 0;
-    while (length < opt.targetLengthFt * 1.15 && stuck < 3) {
+    while (length < target * 1.3 && stuck < 3) {
       const tech = opt.technical;
       const weights: [Seg, number][] = [
         ["sweeper", 3 - tech * 1.5],
@@ -181,76 +280,69 @@ export function generateCourse(course: Course, opt: GenOptions, onProgress?: (i:
       const tot = weights.reduce((a, w) => a + Math.max(0, w[1]), 0);
       // Try several random pieces and keep the first that fits, so narrow areas
       // (taxiways, lanes between islands) don't end the walk on one bad roll.
-      let chosen: { seg: Seg; side: number; built: { pts: Pt[]; dir: number; R: number; weave?: number } } | null = null;
-      for (let tryN = 0; tryN < 14 && !chosen; tryN++) {
+      // Past halfway, steer toward the finish: of the pieces that fit, prefer the one ending nearest it.
+      const homing = length > target * 0.5;
+      let chosen: { pc: Piece; cross?: number } | null = null;
+      let chosenD = Infinity;
+      for (let tryN = 0; tryN < 14 && (!chosen || homing); tryN++) {
         let roll = rnd() * tot;
         let seg: Seg = "turn";
-        for (const [s, w] of weights) { roll -= Math.max(0, w); if (roll <= 0) { seg = s; break; } }
-        // Later tries lean on tighter pieces, which fit where big ones don't.
+        for (const [s2, w] of weights) { roll -= Math.max(0, w); if (roll <= 0) { seg = s2; break; } }
         if (tryN >= 8) seg = (["turn", "kink", "hairpin", "turn", "straight", "kink"] as Seg[])[tryN - 8];
         const side = rnd() < 0.68 ? -lastSide : lastSide;
-        let built: { pts: Pt[]; dir: number; R: number; weave?: number } | null = null;
-        if (seg === "sweeper") { const R = range(65, 125); built = { ...buildArc(R, range(0.7, 2.0), side), R }; }
-        else if (seg === "turn") { const R = range(32, 55); built = { ...buildArc(R, range(1.2, 1.75), side), R }; }
-        else if (seg === "hairpin") { const R = range(28, 34); built = { ...buildArc(R, range(2.6, 3.1), side), R }; }
-        else if (seg === "kink") { const R = range(140, 220); built = { ...buildArc(R, range(0.25, 0.45), side), R }; }
-        else if (seg === "straight") built = { ...buildStraight(range(40, Math.max(50, 170 - straightRun))), R: Infinity };
-        else if (seg === "slalom") {
+        const arc = (R: number, ang: number): Piece => ({ seg, side, R, pts: arcFrom(pos, dir, R, ang, side), dir: dir + side * ang });
+        let pc: Piece;
+        if (seg === "sweeper") pc = arc(range(65, 125), range(0.7, 2.0));
+        else if (seg === "turn") pc = arc(range(32, 55), range(1.2, 1.75));
+        else if (seg === "hairpin") pc = arc(range(28, 34), range(2.6, 3.1));
+        else if (seg === "kink") pc = arc(range(140, 220), range(0.25, 0.45));
+        else if (seg === "straight") pc = { seg, side: 0, R: Infinity, pts: straightFrom(pos, dir, range(40, Math.max(50, 170 - straightRun))), dir };
+        else {
           const spacing = range(60, 74);
           const count = 3 + Math.floor(rnd() * 3);
-          built = { ...buildStraight(spacing * (count + 1)), R: Infinity, weave: spacing };
+          pc = { seg, side: 0, R: Infinity, weave: spacing, pts: straightFrom(pos, dir, spacing * (count + 1)), dir };
         }
-        if (!built || !built.pts.every((p) => safe(p)) || !selfClear(built.pts, nodes.length)) continue;
+        if (!pc.pts.every((p) => safe(p) && clearOfFinish(p))) continue;
+        const chk = checkPiece(pos, pc.pts);
+        if (!chk.ok) continue;
         // Don't drive into a dead end: some room must remain ahead.
-        const end = built.pts[built.pts.length - 1];
+        const end = pc.pts[pc.pts.length - 1];
         let room = true;
-        for (let s2 = 10; s2 <= 40; s2 += 10) if (!safe(add(end, scale(fromAngle(built.dir), s2)))) { room = false; break; }
+        for (let s2 = 10; s2 <= 40; s2 += 10) if (!safe(add(end, scale(fromAngle(pc.dir), s2)))) { room = false; break; }
         if (!room && tryN < 12) continue;
-        chosen = { seg, side, built };
+        const dEnd = homing ? dist(end, approach) * (0.8 + rnd() * 0.4) : 0;
+        if (!chosen || dEnd < chosenD) { chosen = { pc, cross: chk.cross }; chosenD = dEnd; }
       }
       if (!chosen) { stuck++; continue; }
-      const { seg, side, built } = chosen;
       stuck = 0;
+      const { pc } = chosen;
       segId++;
-      for (const p of built.pts) nodes.push({ p, seg, segId, side, R: built.weave ?? built.R });
-      pos = built.pts[built.pts.length - 1];
-      dir = built.dir;
-      length += built.pts.length * STEP;
-      if (seg === "straight" || seg === "slalom") straightRun += built.pts.length * STEP;
-      else straightRun = seg === "kink" ? straightRun : 0;
-      if (seg !== "straight" && seg !== "slalom") lastSide = side;
+      commit(pc, segId, chosen.cross);
+      pos = pc.pts[pc.pts.length - 1];
+      dir = pc.dir;
+      length += pc.pts.length * STEP;
+      if (pc.seg === "straight" || pc.seg === "slalom") straightRun += pc.pts.length * STEP;
+      else straightRun = pc.seg === "kink" ? straightRun : 0;
+      if (pc.seg !== "straight" && pc.seg !== "slalom") lastSide = pc.side;
 
-      // Could the course finish here? Need a finish straight + runout that's clear.
-      if (length > opt.targetLengthFt * 0.5 && seg !== "slalom" && straightRun < 80) {
-        const finLen = 70;
-        const runout = 220;
-        let fits = true;
-        for (let s = STEP; s <= finLen + runout; s += 10) {
-          const q = add(pos, scale(fromAngle(dir), s));
-          if (!(s <= finLen ? safe(q) : safe(q, 12, 120)) || (s <= finLen && !selfClear([q], nodes.length))) { fits = false; break; }
-        }
-        if (fits) {
-          const sc = Math.abs(length + finLen - opt.targetLengthFt);
-          if (!bestCut || sc < bestCut.score) bestCut = { idx: nodes.length, dir, pos, score: sc };
-        }
-      }
+      if (pc.seg !== "slalom") tryFinish();
     }
-    if (opt.stats) opt.stats.lengths.push(Math.round(length));
-    if (!bestCut) { if (opt.stats) opt.stats.noFinish++; return null; }
+    stats.lengths.push(Math.round(length));
+    if (!bestCut) { stats.noFinish++; return null; }
+    const cut = bestCut as { idx: number; segId: number; pieces: Piece[]; crossings: number; total: number; cross?: number };
 
-    const kept = nodes.slice(0, bestCut.idx);
-    pos = bestCut.pos;
-    dir = bestCut.dir;
-    segId++;
-    const fin = buildStraight(70);
-    for (const p of fin.pts) kept.push({ p, seg: "finish", segId, side: 0, R: Infinity });
-    const finishP = fin.pts[fin.pts.length - 1];
+    const kept = nodes.slice(0, cut.idx);
+    let sid = cut.segId;
+    for (const pc of cut.pieces) { sid++; for (const p of pc.pts) kept.push({ p, seg: pc.seg, segId: sid, side: pc.side, R: pc.R }); }
+    sid++;
+    for (const p of straightFrom(approach, finDir, FIN_STRAIGHT)) kept.push({ p, seg: "finish", segId: sid, side: 0, R: Infinity });
 
-    return placeCones(kept, startDir, startP, dir, finishP, rnd);
+    const placed = placeCones(kept, finDir, finishP, rnd);
+    return { ...placed, start: course.start!, finish: course.finish!, crossovers: cut.crossings + (cut.cross !== undefined ? 1 : 0) };
   }
 }
 
-function placeCones(nodes: Node[], startDir: number, startP: Pt, finDir: number, finishP: Pt, rnd: () => number) {
+function placeCones(nodes: Node[], finDir: number, finishP: Pt, rnd: () => number) {
   const cones: Cone[] = [];
   const line: Pt[] = [];
   const range = (a: number, b: number) => a + rnd() * (b - a);
@@ -336,18 +428,12 @@ function placeCones(nodes: Node[], startDir: number, startP: Pt, finDir: number,
     }
   }
 
-  // Start and finish timing lines + finish chute.
-  const sl = perp(fromAngle(startDir));
-  const start = { a: add(startP, scale(sl, 14)), b: add(startP, scale(sl, -14)) };
+  // Finish chute walls. The timing lights are the ones the user placed.
   const fl = perp(fromAngle(finDir));
-  const finish = { a: add(finishP, scale(fl, 18)), b: add(finishP, scale(fl, -18)) };
-  const sg = uid("start"), fg = uid("finish");
-  cones.push({ id: uid("c"), ...start.a, kind: "timing", group: "start", groupId: sg }, { id: uid("c"), ...start.b, kind: "timing", group: "start", groupId: sg });
-  cones.push({ id: uid("c"), ...finish.a, kind: "timing", group: "finish", groupId: fg }, { id: uid("c"), ...finish.b, kind: "timing", group: "finish", groupId: fg });
   const fd = fromAngle(finDir);
   for (let s = 15; s <= 75; s += 12) {
     for (const side of [1, -1]) cones.push({ id: uid("c"), ...add(add(finishP, scale(fd, s)), scale(fl, side * 20)), kind: "standing", group: "wall" });
   }
 
-  return { line: simplify(line, 0.4), cones, start, finish };
+  return { line: simplify(line, 0.4), cones };
 }
