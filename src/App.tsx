@@ -434,7 +434,7 @@ export default function App() {
               )}
               {selection?.type === "line" && (
                 <div className="props">
-                  <div className="small">{course.line.length} control points. Drag handles to reshape; right-click to remove. Use the Driving line tool to extend.</div>
+                  <div className="small">{course.line.length} pins. Drag a pin to move it; drag a small dot between pins, or click the line, to add a pin; right-click a pin to remove it. The Driving line tool extends the end.</div>
                   <button onClick={() => change({ ...course, line: [...course.line].reverse() })}>Reverse direction</button>
                   <button onClick={() => { change({ ...course, line: [] }); setSelection(null); }}>Clear driving line</button>
                 </div>

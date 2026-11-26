@@ -1,6 +1,6 @@
 [package]
 name = "autocross-course-designer"
-version = "0.7.0"
+version = "0.7.1"
 description = "Free SCCA-style autocross course designer"
 authors = ["Autocross Course Designer contributors"]
 license = "MIT"

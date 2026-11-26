@@ -1,7 +1,7 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
-import { FT_PER_S_PER_MPH, add, dist, fromAngle, heading, norm, perp, pointInPolygon, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
+import { FT_PER_S_PER_MPH, add, dist, distToSegment, fromAngle, heading, norm, perp, pointInPolygon, polygonArea, scale, sub, toLatLng, toLocal, type LatLng, type Pt } from "./geo";
 import { finishRunout } from "./rules";
 import { FEATURE_INFO, isEmpty, uid, type Cone, type Course, type Feature, type FeatureKind } from "./model";
 import type { Issue } from "./rules";
@@ -124,6 +124,13 @@ function coneIcon(c: Cone, selected: boolean) {
 const straightIcon = L.divIcon({ className: "", iconSize: [12, 12], iconAnchor: [6, 6], html: `<div style="width:12px;height:12px;background:#fff;border:2px solid #f97316;border-radius:50%;cursor:pointer"></div>` });
 const straightFirstIcon = L.divIcon({ className: "", iconSize: [16, 16], iconAnchor: [8, 8], html: `<div style="width:16px;height:16px;background:#f97316;border:2px solid #fff;border-radius:50%"></div>` });
 const vertexIcon = L.divIcon({ className: "", iconSize: [10, 10], iconAnchor: [5, 5], html: `<div style="width:10px;height:10px;background:#fff;border:2px solid #2563eb;border-radius:2px"></div>` });
+
+/** Where a new pin at q belongs in the line: after the nearest segment. */
+function insertIndex(line: Pt[], q: Pt): number {
+  let best = 1, bd = Infinity;
+  for (let i = 0; i < line.length - 1; i++) { const d = distToSegment(q, line[i], line[i + 1]); if (d < bd) { bd = d; best = i + 1; } }
+  return best;
+}
 
 const midIcon = L.divIcon({ className: "", iconSize: [8, 8], iconAnchor: [4, 4], html: `<div style="width:8px;height:8px;background:rgba(255,255,255,.55);border:1px solid #2563eb;border-radius:50%"></div>` });
 
@@ -542,7 +549,21 @@ export default function MapEditor(props: Props) {
         const b = sim.samples[Math.min(sim.samples.length - 1, i + step)];
         const seg = L.polyline([ll(a.p), ll(b.p)], { color: speedColor(a.v / FT_PER_S_PER_MPH), weight: selection?.type === "line" ? 6 : 4, opacity: 0.9 });
         seg.bindTooltip(`${(a.v / FT_PER_S_PER_MPH).toFixed(0)} mph · ${a.t.toFixed(1)} s · ${a.s.toFixed(0)} ft`, { sticky: true });
-        seg.on("click", (e) => { if (latest.current.tool === "select") { L.DomEvent.stop(e); latest.current.onSelect({ type: "line" }); } });
+        seg.on("click", (e) => {
+          const P = latest.current;
+          if (P.tool !== "select") return;
+          L.DomEvent.stop(e);
+          // Line already selected: a click on it drops a new pin there.
+          if (P.selection?.type === "line" && P.course.line.length >= 2) {
+            const q = toLocal({ lat: e.latlng.lat, lng: e.latlng.lng }, P.course.origin);
+            const at = insertIndex(P.course.line, q);
+            P.onChange({ ...P.course, line: [...P.course.line.slice(0, at), q, ...P.course.line.slice(at)] });
+            P.onStatus("Pin added. Drag it to reshape the line; right-click a pin to remove it.");
+            return;
+          }
+          P.onSelect({ type: "line" });
+          P.onStatus("Line selected. Drag a pin, drag a small dot between pins to add one, or click the line to drop a pin.");
+        });
         seg.addTo(layer);
       }
       // direction arrows
@@ -566,6 +587,16 @@ export default function MapEditor(props: Props) {
           P.onChange({ ...P.course, line: P.course.line.map((v, j) => (j === i ? q : v)) });
         });
         mk.on("contextmenu", () => { const P = latest.current; P.onChange({ ...P.course, line: P.course.line.filter((_, j) => j !== i) }); });
+        // Dot between this pin and the next: drag it to add a pin there.
+        if (i < c.line.length - 1) {
+          const nxt = c.line[i + 1];
+          const mid = L.marker(ll({ x: (p.x + nxt.x) / 2, y: (p.y + nxt.y) / 2 }), { icon: midIcon, draggable: true, title: "Drag to add a pin" }).addTo(layer);
+          mid.on("dragend", () => {
+            const q = toLocal({ lat: mid.getLatLng().lat, lng: mid.getLatLng().lng }, o);
+            const P = latest.current;
+            P.onChange({ ...P.course, line: [...P.course.line.slice(0, i + 1), q, ...P.course.line.slice(i + 1)] });
+          });
+        }
       });
     }
 
