@@ -613,8 +613,14 @@ export default function MapEditor(props: Props) {
       if (okLen > 0) L.polygon(band(0, okLen), { color: "#22c55e", weight: 1, fillColor: "#22c55e", fillOpacity: 0.18, interactive: false }).addTo(layer);
       if (ro.free < ro.need) L.polygon(band(ro.free, ro.need), { color: "#ef4444", weight: 2, dashArray: "4 4", fillColor: "#ef4444", fillOpacity: 0.22, interactive: false }).addTo(layer);
       const short = ro.free < ro.need;
+      const bf = short && ro.blockerId ? c.features.find((f) => f.id === ro.blockerId) : undefined;
+      if (bf) {
+        if (bf.pts.length === 1) L.circleMarker(ll(bf.pts[0]), { radius: 14, color: "#ef4444", weight: 3, fill: false, interactive: false }).addTo(layer);
+        else if (bf.closed) L.polygon(bf.pts.map(ll), { color: "#ef4444", weight: 4, fill: false, interactive: false }).addTo(layer);
+        else L.polyline(bf.pts.map(ll), { color: "#ef4444", weight: 6, interactive: false }).addTo(layer);
+      }
       const tip = add(ro.fp, scale(d, ro.need + 10));
-      L.marker(ll(tip), { interactive: false, icon: L.divIcon({ className: `runout-label${short ? " short" : ""}`, iconSize: [190, 46], iconAnchor: [95, 23], html: `Runout: need ${Math.round(ro.need)} ft at ${Math.round(ro.finishMph)} mph<br>${short ? `clear ${Math.round(ro.free)} ft, stopped by ${ro.blocker || "?"}` : `clear ${ro.free >= ro.need + 195 ? Math.round(ro.need + 200) + "+" : Math.round(ro.free)} ft ✓`}` }) }).addTo(layer);
+      L.marker(ll(tip), { interactive: false, icon: L.divIcon({ className: `runout-label${short ? " short" : ""}`, iconSize: [190, 46], iconAnchor: [95, 23], html: `Runout: need ${Math.round(ro.need)} ft at ${Math.round(ro.finishMph)} mph<br>${short ? `clear ${Math.round(ro.free)} ft, stopped by ${ro.blocker || "?"}${bf ? " (outlined)" : ""}` : `clear ${ro.free >= ro.need + 195 ? Math.round(ro.need + 200) + "+" : Math.round(ro.free)} ft ✓`}` }) }).addTo(layer);
     }
 
     for (const [l, label] of [[c.start, "START"], [c.finish, "FINISH"]] as const) {

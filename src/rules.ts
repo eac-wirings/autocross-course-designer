@@ -66,6 +66,8 @@ export interface Runout {
   need: number;
   free: number;
   blocker: string;
+  /** The zone or object that cut the runout short, if any. */
+  blockerId?: string;
   finishMph: number;
 }
 
@@ -80,15 +82,18 @@ export function finishRunout(c: Course, sim: SimResult | null): Runout | null {
   const need = stoppingDistance(Math.max(last.v, 30 * FT_PER_S_PER_MPH), c.settings.car.brakeG, c.settings.wet) * 1.3 + 40;
   let free = 0;
   let blocker = "";
+  let blockerId: string | undefined;
   for (let d = 0; d <= 1200; d += 5) {
     const q = add(fp, scale(fromAngle(dir), d));
     if (paved.length && !paved.some((f) => pointInPolygon(q, f.pts))) { blocker = "end of the Course area"; break; }
-    const hit = c.features.find((f) => f.kind !== "paved" && f.kind !== "worker" && f.kind !== "extinguisher" && f.kind !== "emergency" && distToShape(q, f.pts, f.closed) < (PEOPLE_KINDS.includes(f.kind) ? 75 : 25));
-    if (hit) { blocker = hit.label || FEATURE_INFO[hit.kind].label; break; }
+    // Margins: people 75 ft, solid objects 25 ft, Don't-use zones (usually grass) 10 ft.
+    const margin = (f: Feature) => (PEOPLE_KINDS.includes(f.kind) ? 75 : f.kind === "nogo" ? 10 : 25);
+    const hit = c.features.find((f) => f.kind !== "paved" && f.kind !== "worker" && f.kind !== "extinguisher" && f.kind !== "emergency" && distToShape(q, f.pts, f.closed) < margin(f));
+    if (hit) { blocker = hit.label || FEATURE_INFO[hit.kind].label; blockerId = hit.id; break; }
     free = d;
     if (d >= need + 200) break;
   }
-  return { fp, dir, need, free, blocker, finishMph: sim.finishMph };
+  return { fp, dir, need, free, blocker, blockerId, finishMph: sim.finishMph };
 }
 
 export function checkCourse(c: Course, sim: SimResult | null): Issue[] {
