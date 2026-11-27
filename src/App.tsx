@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { dist, type Pt } from "./geo";
+import { getVersion } from "@tauri-apps/api/app";
+import { UpdateBanner } from "./UpdateBanner";
 import { conesForLine, generateCourse, type GenResult, type GenStats, type StraightStyle } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
@@ -61,6 +63,7 @@ export default function App() {
   const [show3D, setShow3D] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
   const [help, setHelp] = useState(() => !localStorage.getItem("acd.seenHelp"));
+  const [updCheck, setUpdCheck] = useState(0);
   const [calib, setCalib] = useState<{ a: Pt; b: Pt } | null>(null);
   const [search, setSearch] = useState("");
   const mapRef = useRef<MapHandle>(null);
@@ -246,6 +249,7 @@ export default function App() {
         <button className="primary" disabled={!sim} onClick={() => setShow3D(true)} title={sim ? "" : "Draw a driving line first"}>3D run-through</button>
         <button onClick={() => setHelp(true)}>Help</button>
       </header>
+      <UpdateBanner manualCheck={updCheck} />
 
       <div className="body">
         <aside className="tools">
@@ -500,7 +504,7 @@ export default function App() {
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
       {genOpen && <GenerateDialog course={course} slalomSpacing={options.slalomSpacing} onCones={(r) => { change({ ...course, line: r.line, baseLine: r.line === r.base ? undefined : r.base, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Placed ${r.cones.length} cones along your line${r.moved ? `, moved ${r.moved} gate(s) to stay on pavement` : ""}${r.dropped ? `, left out ${r.dropped} cone(s) with no room` : ""}. Drag any cone to adjust; Undo to take them back.`); }} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
-      {help && <HelpDialog onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
+      {help && <HelpDialog onCheckUpdates={() => { setUpdCheck((n) => n + 1); localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
   );
 }
@@ -639,7 +643,9 @@ function CalibDialog({ measured, onOk, onCancel }: { measured: number; onOk(ft: 
   );
 }
 
-function HelpDialog({ onClose }: { onClose(): void }) {
+function HelpDialog({ onClose, onCheckUpdates }: { onClose(): void; onCheckUpdates(): void }) {
+  const [ver, setVer] = useState("");
+  useEffect(() => { if ("__TAURI_INTERNALS__" in window) getVersion().then(setVer).catch(() => {}); }, []);
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -654,7 +660,7 @@ function HelpDialog({ onClose }: { onClose(): void }) {
         </ol>
         <p className="small">Keys: F find pavement, V select, L line, C cone, P pointer, G gate, S slalom, W wall, 1 start, 2 finish, A area, M measure, R rotate pointer, Delete remove, Enter finish shape, Esc cancel, Ctrl+Z / Ctrl+Y undo/redo, Ctrl+S save.</p>
         <p className="small">Imagery: Esri World Imagery and USGS The National Map. Speeds come from a point-mass simulation and are estimates. Always walk the course with the Event Chair and Safety Steward.</p>
-        <div className="actions"><button className="primary" onClick={onClose}>Got it</button></div>
+        <div className="actions">{ver && <span className="small" style={{ marginRight: "auto" }}>Version {ver}</span>}<button onClick={onCheckUpdates}>Check for updates</button><button className="primary" onClick={onClose}>Got it</button></div>
       </div>
     </div>
   );

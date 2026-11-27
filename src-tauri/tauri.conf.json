@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Autocross Course Designer",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "identifier": "io.github.autocross.coursedesigner",
   "build": {
     "frontendDist": "../dist",
@@ -38,6 +38,18 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4MUIyMjBDQ0EwQjdDMzkKUldRNWZBdktEQ0lieU1USmV2bGRUOStwYng1YTdDTklxOTZMaGJrbk55RlZZQ083MU9TVVNKNXQK",
+      "endpoints": [
+        "https://github.com/eac-wirings/autocross-course-designer/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
