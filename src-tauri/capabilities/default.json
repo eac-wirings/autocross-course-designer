@@ -34,6 +34,20 @@
       ]
     },
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://studio.apexsites.club/*"
+        },
+        {
+          "url": "https://*.apexsites.io/*"
+        },
+        {
+          "url": "https://github.com/eac-wirings/*"
+        }
+      ]
+    }
   ]
 }

@@ -26,6 +26,8 @@ It runs on Windows, macOS and Linux, needs no account or subscription, and does 
 - **Finish runout on the map.** In Course mode a band past the finish shows the stopping distance needed at your finish speed: green where it's clear, red where it falls short, with what cuts it off.
 - **Event facilities.** Timing & scoring, registration, tech, first aid, fire extinguishers, restrooms, impound and emergency access, with the 75 ft people margin applied.
 - **Automatic updates.** The app checks for a new version on launch and installs it with one click (Help → Check for updates any time).
+- **Apex club sign-in.** Sign in with your club's Apex account (approved in your browser) to link a course map to one of your events; it shows on the event in Apex and on the club website.
+- **Community track maps.** Load a site map another club has shared, or share yours (zones, objects and facilities only; never cones).
 - **Clear course and zone locks.** Clear course removes cones, the driving line and timing lines but keeps zones. Lock zones so they can't be reshaped, cut or deleted by accident.
 - **3D run-through.** Drives the simulated line in driver, chase or free-orbit view, with the aerial photo as the ground.
 - **Export.** Save as an `.axcourse` project file, export KML for Google Earth, or export a printable SVG course map with a scale bar.

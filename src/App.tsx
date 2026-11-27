@@ -3,6 +3,8 @@ import "./App.css";
 import { dist, type Pt } from "./geo";
 import { getVersion } from "@tauri-apps/api/app";
 import { UpdateBanner } from "./UpdateBanner";
+import { loadSession, type ApexSession } from "./apex";
+import { ApexAccountDialog, CommunityDialog, LinkEventDialog, ShareSiteDialog } from "./ApexDialogs";
 import { conesForLine, generateCourse, type GenResult, type GenStats, type StraightStyle } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
 import MapEditor, { type Basemap, type MapHandle, type Selection, type Tool, type ToolOptions, type WandSettings } from "./MapEditor";
@@ -64,6 +66,8 @@ export default function App() {
   const [genOpen, setGenOpen] = useState(false);
   const [help, setHelp] = useState(() => !localStorage.getItem("acd.seenHelp"));
   const [updCheck, setUpdCheck] = useState(0);
+  const [apex, setApex] = useState<ApexSession | null>(() => loadSession());
+  const [apexDlg, setApexDlg] = useState<null | "account" | "link" | "community" | "share">(null);
   const [calib, setCalib] = useState<{ a: Pt; b: Pt } | null>(null);
   const [search, setSearch] = useState("");
   const mapRef = useRef<MapHandle>(null);
@@ -244,6 +248,7 @@ export default function App() {
           <option value="osm">Street map</option>
           <option value="none">No background</option>
         </select>
+        <button className="apex-btn" onClick={() => setApexDlg("account")} title="Sign in to your club's Apex account">☁ {apex ? (apex.orgs.find((o) => o.id === apex.orgId)?.name ?? apex.email ?? "Apex") : "Sign in to Apex"}</button>
         <button onClick={clearCourse} title="Remove all cones, the driving line and the timing lines; keep zones">Clear course</button>
         <button className="primary" onClick={() => setGenOpen(true)}>Auto-generate</button>
         <button className="primary" disabled={!sim} onClick={() => setShow3D(true)} title={sim ? "" : "Draw a driving line first"}>3D run-through</button>
@@ -265,6 +270,10 @@ export default function App() {
 
           {mode === "site" ? (
             <>
+          <div className="section-title">Community</div>
+          <button onClick={() => setApexDlg("community")} title="Load a site map another club has shared">📚 Community track maps</button>
+          <button onClick={() => setApexDlg("share")} title="Share this site map (zones and facilities, no cones) with other clubs">⇪ Share this site</button>
+          {course.trackMap && <div className="small">From the library: {course.trackMap.name} v{course.trackMap.version}</div>}
           <div className="section-title">Zones</div>
           <button className={`wand ${tool === "wand" ? "on" : ""}`} onClick={() => setTool("wand")} title={TOOLS.find((t) => t.id === "wand")!.hint}>
             <span>✦ Find pavement</span><kbd>F</kbd>
@@ -348,6 +357,9 @@ export default function App() {
             <label>Slalom spacing <input type="number" min={30} max={120} value={options.slalomSpacing} onChange={(e) => setOptions({ ...options, slalomSpacing: +e.target.value || 66 })} /> ft</label>
             <label>Wall spacing <input type="number" min={2} max={30} value={options.wallSpacing} onChange={(e) => setOptions({ ...options, wallSpacing: +e.target.value || 6 })} /> ft</label>
           </div>
+          <div className="section-title"><b>4</b> Publish</div>
+          <button onClick={() => setApexDlg(apex ? "link" : "account")} title="Attach this course to one of your club's events on Apex">🔗 {course.apexLink ? "Update event link" : "Link to event"}</button>
+          {course.apexLink && <div className="small">Linked: {course.apexLink.eventName} · {course.apexLink.title}</div>}
             </>
           )}
         </aside>
@@ -504,6 +516,23 @@ export default function App() {
       {show3D && sim && <Run3D course={course} sim={sim} basemap={basemap} onClose={() => setShow3D(false)} />}
       {genOpen && <GenerateDialog course={course} slalomSpacing={options.slalomSpacing} onCones={(r) => { change({ ...course, line: r.line, baseLine: r.line === r.base ? undefined : r.base, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Placed ${r.cones.length} cones along your line${r.moved ? `, moved ${r.moved} gate(s) to stay on pavement` : ""}${r.dropped ? `, left out ${r.dropped} cone(s) with no room` : ""}. Drag any cone to adjust; Undo to take them back.`); }} onClose={() => setGenOpen(false)} onPickTool={(t) => { setGenOpen(false); setTool(t); }} onApply={(r) => { change({ ...course, line: r.line, cones: [...course.cones.filter((k) => k.group === "start" || k.group === "finish"), ...r.cones] }); setGenOpen(false); setSelection(null); setStatus(`Generated: ${Math.round(r.lengthFt)} ft, ~${r.timeS.toFixed(1)} s, top ${r.maxMph.toFixed(0)} mph${r.crossovers ? `, ${r.crossovers} crossover${r.crossovers > 1 ? "s" : ""}` : ""}. Click Auto-generate again for a different layout.`); }} />}
       {calib && <CalibDialog measured={dist(calib.a, calib.b)} onOk={applyCalibration} onCancel={() => setCalib(null)} />}
+      {apexDlg === "account" && <ApexAccountDialog session={apex} onSession={setApex} onClose={() => setApexDlg(null)} />}
+      {apexDlg === "link" && <LinkEventDialog session={apex} course={course} stats={{ lengthFt: sim?.lengthFt }} onSignIn={() => setApexDlg("account")} onClose={() => setApexDlg(null)}
+        onLinked={(link, message) => { change({ ...course, apexLink: link }); setApexDlg(null); setStatus(message); }} />}
+      {apexDlg === "community" && <CommunityDialog near={mapRef.current?.center() ?? course.origin} onClose={() => setApexDlg(null)}
+        onLoad={(tm) => {
+          const hasWork = course.cones.length > 0 || course.line.length > 0 || course.features.length > 0;
+          if (hasWork && !confirm(`Start a new course on "${tm.name}"? This replaces the current course (Undo is available).`)) return;
+          const c = { ...newCourse(tm.site.origin), name: tm.name, features: tm.site.features, settings: course.settings, trackMap: { id: tm.id, orgId: tm.organization_id, name: tm.name, version: tm.version } };
+          change(c);
+          setSelection(null);
+          setApexDlg(null);
+          setMode("course");
+          setStatus(`Loaded the "${tm.name}" site map${tm.club ? ` shared by ${tm.club}` : ""}. Place the start and finish to begin designing.`);
+          setTimeout(() => { mapRef.current?.flyTo(c.origin, 17); mapRef.current?.fitCourse(); }, 50);
+        }} />}
+      {apexDlg === "share" && <ShareSiteDialog session={apex} course={course} onSignIn={() => setApexDlg("account")} onClose={() => setApexDlg(null)}
+        onShared={(tm, message) => { change({ ...course, trackMap: tm }); setApexDlg(null); setStatus(message); }} />}
       {help && <HelpDialog onCheckUpdates={() => { setUpdCheck((n) => n + 1); localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} onClose={() => { localStorage.setItem("acd.seenHelp", "1"); setHelp(false); }} />}
     </div>
   );

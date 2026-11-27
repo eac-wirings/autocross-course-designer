@@ -95,6 +95,10 @@ export interface Course {
   line: Pt[];
   /** The line as the user drew it, before slaloms/offsets were woven in. Cleared when the line is edited. */
   baseLine?: Pt[];
+  /** Where this course is linked on Apex (Link to event), so it can be updated in one click. */
+  apexLink?: { orgId: string; eventId: string; eventName: string; courseMapId: string; title: string };
+  /** The community track map the site came from, for publishing new versions. */
+  trackMap?: { id: string; orgId: string; name: string; version: number };
   start: Line2 | null;
   finish: Line2 | null;
   image: ImageOverlay | null;
