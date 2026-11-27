@@ -73,7 +73,8 @@ jobs:
         run: |
           id='${{ steps.tauri.outputs.releaseId }}'
           up() { gh api --method POST -H "Content-Type: application/octet-stream" "https://uploads.github.com/repos/${{ github.repository }}/releases/$id/assets?name=$2" --input "$1" > /dev/null && echo "uploaded $2"; }
-          echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]' | while IFS= read -r f; do
+          # Find the installers on disk (artifactPaths isn't valid JSON on Windows: unescaped backslashes).
+          find src-tauri/target -path '*/bundle/*' \( -name '*-setup.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -type f | while IFS= read -r f; do
             case "$f" in
               *-setup.exe) up "$f" TrackBuilder-Windows-Setup.exe ;;
               *_aarch64.dmg) up "$f" TrackBuilder-Mac-AppleSilicon.dmg ;;
