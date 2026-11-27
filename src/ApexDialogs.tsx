@@ -6,6 +6,7 @@ import {
   type ApexCourseMap, type ApexEvent, type ApexSession, type TrackMapFull, type TrackMapSummary,
 } from "./apex";
 import { exportSvg } from "./io";
+import { renderCourseImage } from "./render";
 import { bbox, toLatLng, type LatLng } from "./geo";
 import { EVENT_KINDS, ZONE_KINDS, type Course, type FeatureKind } from "./model";
 
@@ -139,11 +140,25 @@ export function LinkEventDialog({ session, course, stats, onLinked, onClose, onS
     setBusy(true);
     setMsg("");
     try {
-      const svg = exportSvg(course, `${ev.name} · ${title}`);
-      const r = await linkCourseMap(session, ev.id, {
-        title, course, svg, length_ft: stats.lengthFt, is_published: publish,
+      // Aerial picture when imagery is reachable, plain diagram otherwise.
+      let image: { mime: "image/svg+xml" | "image/jpeg"; data: string };
+      try {
+        const sub = [fmtDate(ev.event_date), title, stats.lengthFt ? `about ${Math.round(stats.lengthFt).toLocaleString()} ft` : "", `${course.cones.length} cones`].filter(Boolean).join(" · ");
+        const img = await renderCourseImage(course, ev.name, sub);
+        image = { mime: "image/jpeg", data: img.base64 };
+      } catch {
+        image = { mime: "image/svg+xml", data: exportSvg(course, `${ev.name} · ${title}`) };
+      }
+      const send = (img: typeof image) => linkCourseMap(session, ev.id, {
+        title, course, image: img, length_ft: stats.lengthFt, is_published: publish,
         cone_count: course.cones.length, replace_id: replaceId || undefined, track_map_id: course.trackMap?.id,
       });
+      let r;
+      try { r = await send(image); } catch (e) {
+        // Older Apex servers only take SVG/PNG: retry with the diagram.
+        if (e instanceof ApexError && e.status === 400 && image.mime === "image/jpeg") r = await send({ mime: "image/svg+xml", data: exportSvg(course, `${ev.name} · ${title}`) });
+        else throw e;
+      }
       onLinked({ orgId, eventId: ev.id, eventName: ev.name, courseMapId: r.course_map.id, title },
         `${replaceId ? "Updated" : "Linked"} "${title}" on ${ev.name}${publish ? "; it shows on the club website" : " (hidden from the website)"}.`);
     } catch (e) {

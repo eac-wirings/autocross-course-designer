@@ -107,14 +107,14 @@ export const listCourseMaps = (s: ApexSession, eventId: string) =>
   call<{ course_maps: ApexCourseMap[] }>(`/api/v1/app/events/${eventId}/course-maps`, { token: s.token });
 
 export const linkCourseMap = (s: ApexSession, eventId: string, body: {
-  title: string; course: Course; svg: string; length_ft?: number; cone_count: number; is_published: boolean; replace_id?: string; track_map_id?: string;
+  title: string; course: Course; image: { mime: "image/svg+xml" | "image/jpeg"; data: string }; length_ft?: number; cone_count: number; is_published: boolean; replace_id?: string; track_map_id?: string;
 }) => call<{ course_map: ApexCourseMap }>(`/api/v1/app/events/${eventId}/course-maps`, {
   method: "POST",
   token: s.token,
   body: JSON.stringify({
     title: body.title,
     course: { ...body.course, image: null, apexLink: undefined },
-    image: { mime: "image/svg+xml", data: body.svg },
+    image: body.image,
     length_ft: body.length_ft,
     cone_count: body.cone_count,
     is_published: body.is_published,

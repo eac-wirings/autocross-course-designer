@@ -124,13 +124,13 @@ export const FEATURE_INFO: Record<FeatureKind, { label: string; color: string; c
   paddock: { label: "Paddock", color: "#a3e635", closed: true, point: false, help: "Paddock. 75 ft minimum margin; finish must not aim here." },
   grid: { label: "Grid", color: "#0891b2", closed: true, point: false, help: "Grid / staging. 75 ft minimum margin; finish must not aim here." },
   worker: { label: "Worker station", color: "#16a34a", closed: false, point: true, help: "Course worker station. Should cover the course and sit away from the car path." },
-  timing: { label: "Timing & scoring", color: "#0ea5e9", closed: false, point: true, emoji: "⏱", help: "Timing truck or trailer. Needs a clear view of the start and finish lights and 75 ft from the course." },
+  timing: { label: "Timing & scoring", color: "#0ea5e9", closed: false, point: true, emoji: "⏱️", help: "Timing truck or trailer. Needs a clear view of the start and finish lights and 75 ft from the course." },
   registration: { label: "Registration", color: "#6366f1", closed: false, point: true, emoji: "📋", help: "Registration / check-in. Near the site entrance, away from the course." },
   tech: { label: "Tech inspection", color: "#64748b", closed: false, point: true, emoji: "🔧", help: "Tech inspection lane, before cars reach grid." },
   firstaid: { label: "First aid / EMT", color: "#ef4444", closed: false, point: true, emoji: "➕", help: "First aid kit or EMT location, with a clear path onto the course." },
   extinguisher: { label: "Fire extinguisher", color: "#dc2626", closed: false, point: true, emoji: "🧯", help: "Fire extinguisher. Usually one at each worker station, at grid and at timing." },
   restroom: { label: "Restrooms", color: "#14b8a6", closed: false, point: true, emoji: "🚻", help: "Restrooms or portable toilets, in the paddock away from the course." },
-  impound: { label: "Impound", color: "#a855f7", closed: false, point: true, emoji: "⚖", help: "Impound area for post-run checks, if your event uses one." },
+  impound: { label: "Impound", color: "#a855f7", closed: false, point: true, emoji: "⚖️", help: "Impound area for post-run checks, if your event uses one." },
   emergency: { label: "Emergency access", color: "#f43f5e", closed: false, point: true, emoji: "🚑", help: "Where an ambulance or fire truck enters the site and reaches the course. Keep it unblocked." },
 };
 
