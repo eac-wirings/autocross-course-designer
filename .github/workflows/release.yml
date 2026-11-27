@@ -58,7 +58,7 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: "Autocross Course Designer v__VERSION__"
-          releaseBody: "Free autocross course designer. Download the installer for your system below. macOS builds are unsigned: right-click the app and choose Open the first time."
+          releaseBody: "New features and fixes. Full notes and installers for every system are on the release page."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
