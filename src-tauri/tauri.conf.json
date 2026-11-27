@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Autocross Course Designer",
-  "version": "0.9.1",
+  "productName": "Track Builder",
+  "version": "1.0.0",
   "identifier": "io.github.autocross.coursedesigner",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Autocross Course Designer",
+        "title": "ApexSites.club Track Builder  \u00b7  Sign your club up at apexsites.club",
         "width": 1440,
         "height": 900,
         "resizable": true,
@@ -39,7 +39,15 @@
     "android": {
       "debugApplicationIdSuffix": ".debug"
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "publisher": "ApexSites.club",
+    "shortDescription": "ApexSites.club Track Builder",
+    "longDescription": "Free autocross course designer from ApexSites.club: map the site, design the course, check SCCA safety rules, run it in 3D and publish it to your club website.",
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {

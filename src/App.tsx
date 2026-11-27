@@ -3,7 +3,9 @@ import "./App.css";
 import { dist, type Pt } from "./geo";
 import { getVersion } from "@tauri-apps/api/app";
 import { UpdateBanner } from "./UpdateBanner";
-import { loadSession, type ApexSession } from "./apex";
+import { loadSession, openInBrowser, type ApexSession } from "./apex";
+
+const PROMO_URL = "https://apexsites.club/?utm_source=track-builder&utm_medium=app&utm_campaign=title-bar";
 import { ApexAccountDialog, CommunityDialog, LinkEventDialog, ShareSiteDialog } from "./ApexDialogs";
 import { conesForLine, generateCourse, type GenResult, type GenStats, type StraightStyle } from "./generate";
 import { deserialize, exportKml, exportSvg, importKml, openFile, saveText, serialize } from "./io";
@@ -224,7 +226,12 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">Autocross Course Designer</div>
+        <div className="brand" title="ApexSites.club Track Builder">
+          <span className="brand-club">ApexSites.club</span> Track Builder
+        </div>
+        <button className="promo" onClick={() => openInBrowser(PROMO_URL)} title="Club websites, events, registration emails and course maps in one place">
+          <span aria-hidden>🏁</span> Sign your club up for ApexSites.club
+        </button>
         <input className="name" value={course.name} onChange={(e) => setCourse({ ...course, name: e.target.value })} title="Course name" />
         <div className="group">
           <button onClick={newProject}>New</button>

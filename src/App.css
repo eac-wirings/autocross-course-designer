@@ -135,3 +135,7 @@ h3 .mini { float: right; font-size: 11px; padding: 1px 6px; }
 .community .preview { border: 1px solid #334155; border-radius: 6px; padding: 6px; display: grid; place-items: center; min-height: 200px; }
 .community .preview img { max-width: 100%; max-height: 260px; background: #fff; }
 .modal textarea { width: 100%; }
+
+.topbar .brand-club { color: #fff; font-weight: 800; }
+.topbar .promo { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: rgba(249, 115, 22, 0.15); border: 1px solid rgba(249, 115, 22, 0.6); color: #fed7aa; white-space: nowrap; }
+.topbar .promo:hover { background: rgba(249, 115, 22, 0.3); color: #fff; }

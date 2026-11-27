@@ -50,6 +50,7 @@ jobs:
       - run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the update bundles; the app checks updates against the matching public key.
@@ -57,8 +58,27 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: "Autocross Course Designer v__VERSION__"
+          releaseName: "ApexSites.club Track Builder v__VERSION__"
           releaseBody: "New features and fixes. Full notes and installers for every system are on the release page."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Same installers under fixed names, so the README can link to
+      # releases/latest/download/<name> and never go stale.
+      - name: Upload installers with simple names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          id='${{ steps.tauri.outputs.releaseId }}'
+          up() { gh api --method POST -H "Content-Type: application/octet-stream" "https://uploads.github.com/repos/${{ github.repository }}/releases/$id/assets?name=$2" --input "$1" > /dev/null && echo "uploaded $2"; }
+          echo '${{ steps.tauri.outputs.artifactPaths }}' | jq -r '.[]' | while IFS= read -r f; do
+            case "$f" in
+              *-setup.exe) up "$f" TrackBuilder-Windows-Setup.exe ;;
+              *_aarch64.dmg) up "$f" TrackBuilder-Mac-AppleSilicon.dmg ;;
+              *_x64.dmg) up "$f" TrackBuilder-Mac-Intel.dmg ;;
+              *.AppImage) up "$f" TrackBuilder-Linux.AppImage ;;
+              *.deb) up "$f" TrackBuilder-Linux.deb ;;
+            esac
+          done

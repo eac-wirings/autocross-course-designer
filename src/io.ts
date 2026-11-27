@@ -101,7 +101,7 @@ export function serialize(c: Course) {
 
 export function deserialize(text: string): Course {
   const raw = JSON.parse(text);
-  if (raw.version !== 1 || !raw.origin) throw new Error("Not an Autocross Course Designer project.");
+  if (raw.version !== 1 || !raw.origin) throw new Error("Not a Track Builder project.");
   const base = newCourse(raw.origin);
   return { ...base, ...raw, settings: { ...base.settings, ...raw.settings } };
 }

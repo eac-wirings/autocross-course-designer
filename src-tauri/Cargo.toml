@@ -1,8 +1,8 @@
 [package]
 name = "autocross-course-designer"
-version = "0.9.1"
+version = "1.0.0"
 description = "Free SCCA-style autocross course designer"
-authors = ["Autocross Course Designer contributors"]
+authors = ["ApexSites.club"]
 license = "MIT"
 repository = ""
 edition = "2024"

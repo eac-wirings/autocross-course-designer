@@ -63,7 +63,7 @@ function deviceName(): string {
 export async function startSignIn(signal: AbortSignal): Promise<{ userCode: string; url: string; done: Promise<ApexSession> }> {
   const s = await call<{ device_code: string; user_code: string; verification_url: string; interval: number; expires_in: number }>(
     "/api/v1/app-connect/start",
-    { method: "POST", body: JSON.stringify({ app: "Autocross Course Designer", device: deviceName() }) },
+    { method: "POST", body: JSON.stringify({ app: "ApexSites.club Track Builder", device: deviceName() }) },
   );
   const done = (async () => {
     const until = Date.now() + s.expires_in * 1000;
